@@ -162,9 +162,7 @@ saarthi-ai/
 │   └── test_alloydb_queries.py
 ├── main.py                      # FastAPI entrypoint
 ├── Dockerfile                   # API container
-├── Dockerfile.dashboard         # Dashboard container
 ├── docker-compose.yml           # Local dev environment
-├── cloud-scheduler.yaml         # Morning briefing cron job
 ├── cloudbuild.yaml              # CI/CD pipeline
 ├── requirements.txt             # API dependencies
 ├── .env.example                 # Environment variable template
