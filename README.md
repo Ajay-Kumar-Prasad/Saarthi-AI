@@ -373,10 +373,10 @@ See [`docs/ADR.md`](docs/ADR.md) for the full justification of every technology 
 
 | Member | GitHub | Focus |
 |---|---|---|
-| Ajay Kumar Prasad | [@username](https://github.com/username) | Learning Agent |
-| Hariharan S | [@username](https://github.com/username) | Work Agent |
-| Joshna Ch | [@username](https://github.com/username) | Health Agent |
-| Shubham Negi | [@username](https://github.com/username) | Finance Agent |
+| Ajay Kumar Prasad | [@username](https://github.com/Ajay-Kumar-Prasad) | Learning Agent |
+| Hariharan S | [@username](https://github.com/vldzio) | Work Agent |
+| Joshna Ch | [@username](https://github.com/ChJoshna) | Health Agent |
+| Shubham Negi | [@username](https://github.com/shubham5557) | Finance Agent |
 
 **Built at:** GenAI Academy APAC Edition 2026 · Hack2skill × Google Cloud
 
