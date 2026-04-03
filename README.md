@@ -61,7 +61,7 @@ It doesn't wait for you to ask. Every morning at 7am, it has already looked at y
 
 ## Architecture
 
-![alt text](assets/image.png)
+![alt text](assets/saarthi-ai.png)
 
 ### Technology Choices
 
