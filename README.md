@@ -135,9 +135,7 @@ saarthi-ai/
 │   ├── finance_agent.py         # Budget, bills, spending
 │   ├── learning_agent.py        # Courses, books, study
 │   ├── social_agent.py          # Events, birthdays, relationships
-│   ├── context_injector.py      # Pulls user profile before every call
-│   ├── conflict_detector.py     # Cross-domain conflict rules engine
-│   └── parallel_runner.py       # asyncio.gather() for all sub-agents
+│ 
 ├── tools/
 │   ├── calendar_mcp.py          # Google Calendar MCP wrapper
 │   ├── tasks_mcp.py             # Task manager MCP
@@ -148,8 +146,7 @@ saarthi-ai/
 │   ├── semantic_search.py       # pgvector RAG over life_logs
 │   ├── proof_of_logic.py        # Data-backed recommendation engine
 │   └── schema.sql               # Full database schema with pgvector
-├── proactive/
-│   └── morning_briefing.py      # Cloud Scheduler triggered briefing
+│  
 ├── security/
 │   └── zero_knowledge.py        # Privacy model + GDPR erase endpoint
 ├── dashboard/
