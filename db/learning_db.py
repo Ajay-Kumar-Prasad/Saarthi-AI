@@ -26,15 +26,6 @@ MOCK_DB = os.getenv("MOCK_DB", "false").lower() == "true"
 
 async def get_all_resources(user_id: str, status: str | None = None) -> list[dict]:
     """Fetch all learning resources for a user, optionally filtered by status."""
-    if MOCK_DB:
-        rows = [
-            {"id": "res-001", "title": "Python Crash Course", "resource_type": "book", "status": "in_progress", "progress_pct": 45, "tags": ["python"], "author": "Eric Matthes"},
-            {"id": "res-002", "title": "GCP Professional Certificate", "resource_type": "course", "status": "in_progress", "progress_pct": 60, "tags": ["cloud", "gcp"], "author": "Google"},
-            {"id": "res-003", "title": "Deep Learning Specialization", "resource_type": "course", "status": "paused", "progress_pct": 30, "tags": ["ml", "ai"], "author": "Andrew Ng"},
-        ]
-        if status:
-            rows = [r for r in rows if r["status"] == status]
-        return rows
     conn = await get_connection()
     try:
         if status:
@@ -281,8 +272,6 @@ async def create_study_goal(goal: StudyGoal) -> dict:
 
 async def get_weekly_study_hours(user_id: str) -> float:
     """Total hours of completed study sessions in the past 7 days."""
-    if MOCK_DB:
-        return 3.5
     conn = await get_connection()
     try:
         row = await conn.fetchrow(
@@ -305,8 +294,6 @@ async def get_study_streak(user_id: str) -> int:
     Counts how many consecutive days (ending today) the user
     completed at least one study session.
     """
-    if MOCK_DB:
-        return 5
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -519,8 +506,6 @@ async def add_user_skill(
 
 
 async def compute_skill_gap(user_id: str, role_name: str) -> dict:
-    if MOCK_DB:
-        return {"readiness_pct": 45, "gap_score": 55, "matched": ["Python"], "missing_required": ["Apache Spark", "Kafka", "dbt"], "missing_recommended": ["Airflow", "BigQuery"]}
     """
     Compare the user's current skills against the requirements for a role.
 
@@ -588,8 +573,6 @@ async def compute_skill_gap(user_id: str, role_name: str) -> dict:
 # =============================================================================
 
 async def get_due_flashcards(user_id: str, limit: int = 10) -> list[dict]:
-    if MOCK_DB:
-        return []
     """Return flashcards due for review right now."""
     conn = await get_connection()
     try:
@@ -619,9 +602,6 @@ async def create_flashcard(
 ) -> dict:
     """Create a new flashcard for a learning resource."""
     conn = await get_connection()
-    if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "user_id": user_id, "resource_id": resource_id, "question": question, "answer": answer, "next_review_at": "now"}
     try:
         resource = await conn.fetchrow(
             "SELECT id FROM learning_resources WHERE id = $1 AND user_id = $2",
@@ -662,8 +642,6 @@ async def update_flashcard_after_review(
         interval: rep=1→1d, rep=2→6d, rep>2→prev_interval * ef
     """
     conn = await get_connection()
-    if MOCK_DB:
-        return {"id": flashcard_id, "user_id": user_id, "quality": quality, "interval_days": 1, "next_review_at": "tomorrow"}
     try:
         if quality < 0 or quality > 5:
             return {}
@@ -747,8 +725,6 @@ async def get_flashcard_stats(user_id: str) -> dict:
 # =============================================================================
 
 async def get_recommendation_context(user_id: str) -> dict:
-    if MOCK_DB:
-        return {"completed": [], "in_progress": [{"title": "Python Crash Course", "progress_pct": 45}, {"title": "GCP Professional Certificate", "progress_pct": 60}], "goals": [{"title": "Complete GCP certification"}], "skills": [{"skill_name": "Python", "proficiency": "intermediate"}]}
     """
     Pull all data the recommendation engine needs:
     - completed resources (what the user knows)
@@ -955,7 +931,7 @@ async def update_path_step_status(
     """Mark a path step as completed, in_progress, or skipped."""
     conn = await get_connection()
     if MOCK_DB:
-        return {"id": "step-001", "path_id": path_id, "step_order": step_order, "status": step_status}
+        return {"id": "step-001", "path_id": path_id, "step_order": step_order, "status": status}
     try:
         if status not in {"completed", "in_progress", "skipped", "pending"}:
             return {}
