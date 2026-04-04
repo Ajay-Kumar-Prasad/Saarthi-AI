@@ -99,13 +99,10 @@ async def update_resource_progress(
     resource_id: str, user_id: str, progress_pct: int, current_page: int | None = None
 ) -> dict:
     """Update progress percentage (and optional page) on a resource."""
-    if MOCK_DB:
-        return {"id": resource_id, "user_id": user_id, "progress_pct": progress_pct, "status": "completed" if progress_pct >= 100 else "in_progress"}
     if progress_pct < 0 or progress_pct > 100:
         return {}
     if current_page is not None and current_page < 0:
         return {}
-
     conn = await get_connection()
     try:
         new_status = "completed" if progress_pct >= 100 else "in_progress"
@@ -157,9 +154,6 @@ async def get_upcoming_sessions(user_id: str, days_ahead: int = 7) -> list[dict]
 
 
 async def create_study_session(session: StudySession) -> dict:
-    if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "user_id": session.user_id, "resource_id": session.resource_id, "title": session.title, "scheduled_at": str(session.scheduled_at), "duration_minutes": session.duration_minutes, "completed": False}
     """Create a study session record (after the calendar event is booked via MCP)."""
     conn = await get_connection()
     try:
@@ -195,8 +189,6 @@ async def create_study_session(session: StudySession) -> dict:
 
 
 async def mark_session_complete(session_id: str, user_id: str, notes: str = "") -> dict:
-    if MOCK_DB:
-        return {"id": session_id, "user_id": user_id, "completed": True, "notes": notes}
     """Mark a study session as completed."""
     conn = await get_connection()
     try:
@@ -319,8 +311,6 @@ async def get_study_streak(user_id: str) -> int:
 
 
 async def query_learning_history_safe(user_id: str, question: str) -> dict:
-    if MOCK_DB:
-        return {"question": question, "generated_sql": None, "results": [], "note": "Mock mode"}
     """
     Safely run AlloyDB NL-to-SQL for the learning domain.
     Allows only single SELECT statements and blocks suspicious SQL.
@@ -332,7 +322,14 @@ async def query_learning_history_safe(user_id: str, question: str) -> dict:
             "SELECT google_ml.nl_to_sql($1, 'saarthi_schema')",
             scoped_question,
         )
-        generated_sql = (nl_result[0][0] or "").strip() if nl_result else ""
+        if not nl_result:
+            generated_sql = ""
+        else:
+            row = nl_result[0]
+            try:
+                generated_sql = (row[0] or "").strip()
+            except (KeyError, TypeError):
+                generated_sql = (row.get("google_ml.nl_to_sql") or "").strip()
         lower = generated_sql.lower()
 
         if not generated_sql:
@@ -895,8 +892,6 @@ async def get_learning_path(user_id: str, path_id: str) -> dict:
 
 
 async def get_all_learning_paths(user_id: str) -> list[dict]:
-    if MOCK_DB:
-        return []
     """Return all learning paths for a user with high-level progress."""
     conn = await get_connection()
     try:

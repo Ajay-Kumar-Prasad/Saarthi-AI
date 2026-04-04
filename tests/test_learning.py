@@ -632,3 +632,551 @@ async def test_tool_schedule_flashcard_review_missing_data():
     )
     result = json.loads(result_str)
     assert "error" in result
+
+
+# =============================================================================
+# ADDITIONAL TESTS — full coverage of all 13 tools + edge cases
+# =============================================================================
+
+# ── Tool 2: add_learning_resource — validation ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_add_resource_invalid_type():
+    """Invalid resource_type should return error without hitting DB."""
+    from agents.learning_agent import tool_add_learning_resource
+    result_str = await tool_add_learning_resource(
+        user_id="test-user",
+        title="Some Resource",
+        resource_type="magazine",   # not in allowed set
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+    assert "Invalid resource_type" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_add_resource_empty_title():
+    """Empty title should return error."""
+    from agents.learning_agent import tool_add_learning_resource
+    result_str = await tool_add_learning_resource(
+        user_id="test-user",
+        title="   ",
+        resource_type="book",
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_add_resource_negative_pages():
+    """Negative total_pages should return error."""
+    from agents.learning_agent import tool_add_learning_resource
+    result_str = await tool_add_learning_resource(
+        user_id="test-user",
+        title="Some Book",
+        resource_type="book",
+        total_pages=-10,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── Tool 3: update_progress — validation ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_update_progress_marks_completed_at_100():
+    """progress_pct=100 should trigger status=completed in the DB update."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = {
+        "id": "res-001",
+        "user_id": "test-user",
+        "title": "Python Crash Course",
+        "progress_pct": 100,
+        "status": "completed",
+    }
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_update_progress
+        result_str = await tool_update_progress(
+            user_id="test-user",
+            resource_id="res-001",
+            progress_pct=100,
+        )
+        result = json.loads(result_str)
+    assert "completed" in result["message"].lower()
+    assert result["resource"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_tool_update_progress_negative_page():
+    """Negative current_page should return error."""
+    from agents.learning_agent import tool_update_progress
+    result_str = await tool_update_progress(
+        user_id="test-user",
+        resource_id="res-001",
+        progress_pct=50,
+        current_page=-5,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_update_progress_resource_not_found():
+    """DB returning empty dict should surface as error."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = None   # resource not found
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_update_progress
+        result_str = await tool_update_progress(
+            user_id="test-user",
+            resource_id="nonexistent",
+            progress_pct=50,
+        )
+        result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── Tool 4: schedule_study_session — validation ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_schedule_rejects_past_date():
+    """Scheduling in the past should return an error immediately."""
+    import os
+    os.environ["MOCK_MCP"] = "true"
+    from agents.learning_agent import tool_schedule_study_session
+    result_str = await tool_schedule_study_session(
+        user_id="test-user",
+        resource_id="res-001",
+        resource_title="Python Crash Course",
+        date="2020-01-01",
+        duration_minutes=60,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_schedule_invalid_duration():
+    """duration_minutes=0 should return an error."""
+    import os
+    os.environ["MOCK_MCP"] = "true"
+    from agents.learning_agent import tool_schedule_study_session
+    result_str = await tool_schedule_study_session(
+        user_id="test-user",
+        resource_id="res-001",
+        resource_title="Python Crash Course",
+        date="2026-06-01",
+        duration_minutes=0,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_schedule_calendar_rollback_on_db_failure():
+    """If DB save fails after calendar event is created, rollback should be attempted."""
+    import os
+    os.environ["MOCK_MCP"] = "true"
+
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = None   # ownership check fails -> empty dict
+
+    mock_free_slot = {
+        "start": datetime(2026, 6, 1, 6, 0, 0),
+        "end":   datetime(2026, 6, 1, 7, 0, 0),
+    }
+
+    with patch("agents.learning_agent.find_free_slot", return_value=mock_free_slot), \
+         patch("agents.learning_agent.delete_calendar_event", new_callable=AsyncMock) as mock_delete, \
+         patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_schedule_study_session
+        result_str = await tool_schedule_study_session(
+            user_id="test-user",
+            resource_id="res-001",
+            resource_title="Python Crash Course",
+            date="2026-06-01",
+            duration_minutes=60,
+        )
+        result = json.loads(result_str)
+
+    assert "error" in result
+    mock_delete.assert_called_once()   # rollback was attempted
+
+
+# ── Tool 5 & 6: notes ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_log_study_note_empty_content():
+    """Empty note_content should return error without calling MCP."""
+    from agents.learning_agent import tool_log_study_note
+    result_str = await tool_log_study_note(
+        user_id="test-user",
+        resource_title="Python Crash Course",
+        note_content="   ",
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_get_notes_returns_list():
+    """get_notes should return a notes list and count."""
+    import os
+    os.environ["MOCK_MCP"] = "true"
+    from agents.learning_agent import tool_get_notes
+    result_str = await tool_get_notes(user_id="test-user")
+    result = json.loads(result_str)
+    assert "notes" in result
+    assert "count" in result
+    assert isinstance(result["notes"], list)
+
+
+# ── Tool 7: mark_session_done ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_mark_session_done_success():
+    """Marking an owned session as done should return completed=True."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = {
+        "id": "sess-001",
+        "user_id": "test-user",
+        "completed": True,
+        "notes": "Finished chapter 5",
+    }
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_mark_session_done
+        result_str = await tool_mark_session_done(
+            user_id="test-user",
+            session_id="sess-001",
+            notes="Finished chapter 5",
+        )
+        result = json.loads(result_str)
+    assert result["completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_tool_mark_session_done_not_found():
+    """Session not owned by user should return error."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = None
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_mark_session_done
+        result_str = await tool_mark_session_done(
+            user_id="test-user",
+            session_id="sess-other",
+        )
+        result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── Tool 9: create_study_goal — validation ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_create_study_goal_success():
+    """Valid goal should be persisted and returned."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = {
+        "id": "goal-new-001",
+        "user_id": "test-user",
+        "title": "Finish Python book",
+        "weekly_hours_target": 6.0,
+        "progress_pct": 0,
+        "status": "active",
+    }
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_create_study_goal
+        result_str = await tool_create_study_goal(
+            user_id="test-user",
+            title="Finish Python book",
+            target_date="2026-06-30",
+            weekly_hours_target=6.0,
+        )
+        result = json.loads(result_str)
+    assert result["created"] is True
+    assert result["goal"]["title"] == "Finish Python book"
+
+
+@pytest.mark.asyncio
+async def test_tool_create_study_goal_zero_hours():
+    """weekly_hours_target=0 should return error."""
+    from agents.learning_agent import tool_create_study_goal
+    result_str = await tool_create_study_goal(
+        user_id="test-user",
+        title="Some Goal",
+        target_date="2026-06-30",
+        weekly_hours_target=0,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_create_study_goal_invalid_date():
+    """Malformed target_date should return error."""
+    from agents.learning_agent import tool_create_study_goal
+    result_str = await tool_create_study_goal(
+        user_id="test-user",
+        title="Some Goal",
+        target_date="not-a-date",
+        weekly_hours_target=5.0,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── Tool 8: query_learning_history — SQL safety ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_query_learning_history_blocks_write_sql():
+    """NL-to-SQL that generates a DELETE should be blocked."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetch.return_value = [
+        {"google_ml.nl_to_sql": "DELETE FROM learning_resources WHERE user_id='test'"}
+    ]
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import query_learning_history_safe
+        result = await query_learning_history_safe("test-user", "delete all my resources")
+    assert "error" in result
+    assert "Unsafe" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_query_learning_history_blocks_unscoped_sql():
+    """SQL without user_id in it should be blocked."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetch.return_value = [
+        {"google_ml.nl_to_sql": "SELECT * FROM learning_resources"}
+    ]
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import query_learning_history_safe
+        result = await query_learning_history_safe("test-user", "show everything")
+    assert "error" in result
+    assert "user-scoped" in result["error"]
+
+
+# ── Tool 11: flashcard review — action=review ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_flashcard_review_action_success():
+    """Review action with quality=5 should return reviewed result."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.side_effect = [
+        {"id": "card-001", "ease_factor": 2.5, "interval_days": 6, "repetitions": 2},
+        {
+            "id": "card-001", "ease_factor": 2.6, "interval_days": 15,
+            "repetitions": 3,
+            "next_review_at": datetime.utcnow() + timedelta(days=15),
+            "last_reviewed_at": datetime.utcnow(),
+        },
+    ]
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_schedule_flashcard_review
+        result_str = await tool_schedule_flashcard_review(
+            user_id="test-user",
+            action="review",
+            flashcard_id="card-001",
+            quality=5,
+        )
+        result = json.loads(result_str)
+    assert result["action"] == "reviewed"
+    assert result["result"] == "correct"
+    assert result["quality"] == 5
+
+
+@pytest.mark.asyncio
+async def test_tool_flashcard_review_invalid_quality():
+    """quality=6 is out of range and should return error."""
+    from agents.learning_agent import tool_schedule_flashcard_review
+    result_str = await tool_schedule_flashcard_review(
+        user_id="test-user",
+        action="review",
+        flashcard_id="card-001",
+        quality=6,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_flashcard_review_missing_id():
+    """review action without flashcard_id should return error."""
+    from agents.learning_agent import tool_schedule_flashcard_review
+    result_str = await tool_schedule_flashcard_review(
+        user_id="test-user",
+        action="review",
+        flashcard_id="",
+        quality=4,
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_flashcard_unknown_action():
+    """Unknown action string should return error."""
+    from agents.learning_agent import tool_schedule_flashcard_review
+    result_str = await tool_schedule_flashcard_review(
+        user_id="test-user",
+        action="delete",
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── Tool 13: learning path — view + invalid status ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_learning_path_view_all():
+    """view action with no path_id should return all paths."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetch.return_value = [
+        {
+            "id": "path-001", "user_id": "test-user",
+            "title": "Road to Data Engineer", "status": "active",
+            "estimated_weeks": 8, "total_steps": 3, "completed_steps": 1,
+            "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
+            "target_role": "Data Engineer", "description": "test",
+        }
+    ]
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from agents.learning_agent import tool_create_learning_path
+        result_str = await tool_create_learning_path(
+            user_id="test-user",
+            action="view",
+        )
+        result = json.loads(result_str)
+    assert result["action"] == "view_all"
+    assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_learning_path_update_step_invalid_status():
+    """Invalid step_status should return error before hitting DB."""
+    from agents.learning_agent import tool_create_learning_path
+    result_str = await tool_create_learning_path(
+        user_id="test-user",
+        action="update_step",
+        path_id="path-001",
+        step_order=1,
+        step_status="exploded",   # not a valid status
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_learning_path_unknown_action():
+    """Unknown action should return error."""
+    from agents.learning_agent import tool_create_learning_path
+    result_str = await tool_create_learning_path(
+        user_id="test-user",
+        action="delete",
+    )
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+# ── AgentResponse contract — error and partial states ────────────────────────
+
+def test_agent_response_error_state():
+    from db.schemas import AgentResponse, AgentStatus
+    resp = AgentResponse(
+        agent="learning_agent",
+        status=AgentStatus.ERROR,
+        summary="AlloyDB connection failed.",
+        conflicts=[],
+        actions_taken=[],
+        data=None,
+    )
+    assert resp.status == AgentStatus.ERROR
+    assert resp.data is None
+
+
+def test_agent_response_partial_state():
+    from db.schemas import AgentResponse, AgentStatus
+    resp = AgentResponse(
+        agent="learning_agent",
+        status=AgentStatus.PARTIAL,
+        summary="Some tools failed.",
+        conflicts=["Calendar MCP unreachable"],
+        actions_taken=["Fetched resources from DB"],
+        data={"raw_text": "..."},
+    )
+    assert resp.status == AgentStatus.PARTIAL
+    assert len(resp.conflicts) == 1
+    assert len(resp.actions_taken) == 1
+
+
+# ── DB layer — update_resource_progress edge cases ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_db_update_resource_progress_invalid_pct():
+    """progress_pct outside 0-100 should return empty dict without DB call."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import update_resource_progress
+        result = await update_resource_progress(
+            resource_id="res-001",
+            user_id="test-user",
+            progress_pct=150,
+        )
+    assert result == {}
+    mock_conn.fetchrow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_db_update_resource_progress_success():
+    """Valid update should return updated resource dict."""
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetchrow.return_value = {
+        "id": "res-001",
+        "progress_pct": 75,
+        "status": "in_progress",
+    }
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import update_resource_progress
+        result = await update_resource_progress(
+            resource_id="res-001",
+            user_id="test-user",
+            progress_pct=75,
+        )
+    assert result["progress_pct"] == 75
+    assert result["status"] == "in_progress"
+
+
+# ── missing user_id guards ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tool_get_learning_status_missing_user_id():
+    from agents.learning_agent import tool_get_learning_status
+    result_str = await tool_get_learning_status("")
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_get_notes_missing_user_id():
+    from agents.learning_agent import tool_get_notes
+    result_str = await tool_get_notes(user_id="")
+    result = json.loads(result_str)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tool_analyze_skill_gap_missing_inputs():
+    from agents.learning_agent import tool_analyze_skill_gap
+    result_str = await tool_analyze_skill_gap(user_id="", role_name="")
+    result = json.loads(result_str)
+    assert "error" in result
