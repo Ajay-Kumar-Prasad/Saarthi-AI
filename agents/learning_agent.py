@@ -22,26 +22,36 @@ Returns:
     Always an AgentResponse (see models/schemas.py).
     The orchestrator reads .conflicts to build cross-domain insights.
 """
-
+import re
 import json
 import logging
 from datetime import datetime, timedelta
+import uuid
 
 try:
     from google.adk.agents import Agent
     from google.adk.runners import Runner
-except Exception:  # pragma: no cover - allows unit tests without ADK installed
-    class Agent:  # type: ignore
-        def __init__(self, *args, **kwargs):
-            self.args = args
-            self.kwargs = kwargs
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+except Exception:  # pragma: no cover
+    class Agent:
+        def __init__(self, *args, **kwargs): pass
 
-    class Runner:  # type: ignore
-        def __init__(self, agent):
-            self.agent = agent
-
-        async def run(self, user_message: str, context: dict):
+    class Runner:
+        def __init__(self, **kwargs): pass
+        async def run_async(self, **kwargs):
             raise RuntimeError("google-adk is required to run the live agent")
+            yield
+
+    class InMemorySessionService:
+        async def create_session(self, **kwargs): pass
+
+    class types:
+        class Content:
+            def __init__(self, **kwargs): pass
+        class Part:
+            @staticmethod
+            def text(t): return t
 
 from db.learning_db import (
     get_all_resources,
@@ -938,7 +948,7 @@ dates, skill names. Never be vague. Celebrate streaks and milestones.
 
 learning_agent = Agent(
     name="learning_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     description=(
         "Manages the user's learning journey — books, courses, study schedules, "
         "notes, streaks, and progress. Detects conflicts between study sessions "
@@ -1057,6 +1067,11 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
     )
 
 
+# Module-level session service — shared across all calls
+_session_service = InMemorySessionService()
+APP_NAME = "saarthi_learning_agent"
+
+
 async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
     """
     Run the learning agent directly (used for unit tests and the demo endpoint).
@@ -1078,27 +1093,60 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
         except Exception as exc:
             logger.error("Goal orchestration failed: %s", exc)
 
-    runner = Runner(agent=learning_agent)
+    # ── NEW: correct ADK runner pattern ──────────────────────────────────────
     try:
-        result = await runner.run(
-            user_message=message,
-            context={"user_id": user_id},
+        runner = Runner(
+            agent=learning_agent,
+            app_name=APP_NAME,
+            session_service=_session_service,
         )
 
-        # Parse the JSON response the agent returns
+        # Each request gets its own session so history doesn't bleed across calls
+        session_id = str(uuid.uuid4())
+        await _session_service.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        # Wrap the message in the format ADK expects
+        content = types.Content(
+            role="user",
+            parts=[types.Part(text=message)],
+        )
+
+        # run_async returns an async generator — iterate to find the final response
+        final_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content,
+        ):
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    final_text = event.content.parts[0].text or ""
+                break
+
+        # Parse the JSON the agent returns
         try:
-            raw = json.loads(result.text)
+            # Strip markdown code fences if model wraps response in ```json ... ```
+            cleaned = final_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```[a-z]*\n?", "", cleaned)
+                cleaned = re.sub(r"\n?```$", "", cleaned)
+                cleaned = cleaned.strip()
+            raw = json.loads(cleaned)
             return AgentResponse(**raw)
         except (json.JSONDecodeError, ValueError):
-            # If the model response is invalid, still return contract-safe output.
             return AgentResponse(
                 agent="learning_agent",
                 status=AgentStatus.PARTIAL,
-                summary="Model response was not valid AgentResponse JSON.",
+                summary=final_text or "Model returned an empty response.",
                 conflicts=[],
                 actions_taken=[],
-                data={"raw_text": result.text},
+                data={"raw_text": final_text},
             )
+
     except Exception as exc:
         logger.error("Learning agent error: %s", exc)
         return AgentResponse(

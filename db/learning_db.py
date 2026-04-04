@@ -17,12 +17,24 @@ except Exception:  # pragma: no cover - allows unit tests without AlloyDB deps
 from db.schemas import LearningResource, StudySession, StudyGoal
 
 logger = logging.getLogger(__name__)
+import os
+MOCK_DB = os.getenv("MOCK_DB", "false").lower() == "true"
+
 
 
 # ── Learning Resources ────────────────────────────────────────────────────────
 
 async def get_all_resources(user_id: str, status: str | None = None) -> list[dict]:
     """Fetch all learning resources for a user, optionally filtered by status."""
+    if MOCK_DB:
+        rows = [
+            {"id": "res-001", "title": "Python Crash Course", "resource_type": "book", "status": "in_progress", "progress_pct": 45, "tags": ["python"], "author": "Eric Matthes"},
+            {"id": "res-002", "title": "GCP Professional Certificate", "resource_type": "course", "status": "in_progress", "progress_pct": 60, "tags": ["cloud", "gcp"], "author": "Google"},
+            {"id": "res-003", "title": "Deep Learning Specialization", "resource_type": "course", "status": "paused", "progress_pct": 30, "tags": ["ml", "ai"], "author": "Andrew Ng"},
+        ]
+        if status:
+            rows = [r for r in rows if r["status"] == status]
+        return rows
     conn = await get_connection()
     try:
         if status:
@@ -56,6 +68,9 @@ async def get_all_resources(user_id: str, status: str | None = None) -> list[dic
 
 
 async def add_resource(resource: LearningResource) -> dict:
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "user_id": resource.user_id, "title": resource.title, "resource_type": resource.resource_type, "status": "not_started", "progress_pct": 0, "tags": resource.tags}
     """Insert a new learning resource and return the created row."""
     conn = await get_connection()
     try:
@@ -93,6 +108,8 @@ async def update_resource_progress(
     resource_id: str, user_id: str, progress_pct: int, current_page: int | None = None
 ) -> dict:
     """Update progress percentage (and optional page) on a resource."""
+    if MOCK_DB:
+        return {"id": resource_id, "user_id": user_id, "progress_pct": progress_pct, "status": "completed" if progress_pct >= 100 else "in_progress"}
     if progress_pct < 0 or progress_pct > 100:
         return {}
     if current_page is not None and current_page < 0:
@@ -126,6 +143,8 @@ async def update_resource_progress(
 
 async def get_upcoming_sessions(user_id: str, days_ahead: int = 7) -> list[dict]:
     """Fetch all upcoming study sessions within the next N days."""
+    if MOCK_DB:
+        return []
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -147,6 +166,9 @@ async def get_upcoming_sessions(user_id: str, days_ahead: int = 7) -> list[dict]
 
 
 async def create_study_session(session: StudySession) -> dict:
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "user_id": session.user_id, "resource_id": session.resource_id, "title": session.title, "scheduled_at": str(session.scheduled_at), "duration_minutes": session.duration_minutes, "completed": False}
     """Create a study session record (after the calendar event is booked via MCP)."""
     conn = await get_connection()
     try:
@@ -182,6 +204,8 @@ async def create_study_session(session: StudySession) -> dict:
 
 
 async def mark_session_complete(session_id: str, user_id: str, notes: str = "") -> dict:
+    if MOCK_DB:
+        return {"id": session_id, "user_id": user_id, "completed": True, "notes": notes}
     """Mark a study session as completed."""
     conn = await get_connection()
     try:
@@ -205,6 +229,8 @@ async def mark_session_complete(session_id: str, user_id: str, notes: str = "") 
 
 async def get_active_goals(user_id: str) -> list[dict]:
     """Return all active study goals for the user."""
+    if MOCK_DB:
+        return [{"id": "goal-001", "title": "Complete GCP certification", "weekly_hours_target": 8.0, "progress_pct": 60, "target_date": "2026-05-04", "status": "active"}]
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -223,6 +249,9 @@ async def get_active_goals(user_id: str) -> list[dict]:
 
 
 async def create_study_goal(goal: StudyGoal) -> dict:
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "user_id": goal.user_id, "title": goal.title, "weekly_hours_target": goal.weekly_hours_target, "progress_pct": 0, "status": "active"}
     """Persist a new study goal."""
     conn = await get_connection()
     try:
@@ -252,6 +281,8 @@ async def create_study_goal(goal: StudyGoal) -> dict:
 
 async def get_weekly_study_hours(user_id: str) -> float:
     """Total hours of completed study sessions in the past 7 days."""
+    if MOCK_DB:
+        return 3.5
     conn = await get_connection()
     try:
         row = await conn.fetchrow(
@@ -274,6 +305,8 @@ async def get_study_streak(user_id: str) -> int:
     Counts how many consecutive days (ending today) the user
     completed at least one study session.
     """
+    if MOCK_DB:
+        return 5
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -299,6 +332,8 @@ async def get_study_streak(user_id: str) -> int:
 
 
 async def query_learning_history_safe(user_id: str, question: str) -> dict:
+    if MOCK_DB:
+        return {"question": question, "generated_sql": None, "results": [], "note": "Mock mode"}
     """
     Safely run AlloyDB NL-to-SQL for the learning domain.
     Allows only single SELECT statements and blocks suspicious SQL.
@@ -387,6 +422,8 @@ Covers 4 new features:
 # =============================================================================
 
 async def get_user_skills(user_id: str) -> list[dict]:
+    if MOCK_DB:
+        return [{"skill_name": "Python", "proficiency": "intermediate"}, {"skill_name": "SQL", "proficiency": "beginner"}]
     """Return all skills the user currently has."""
     conn = await get_connection()
     try:
@@ -447,6 +484,8 @@ async def add_user_skill(
     source_resource_id: str | None = None,
 ) -> dict:
     """Add or update a skill for the user."""
+    if MOCK_DB:
+        return {"user_id": user_id, "skill_name": skill_name, "proficiency": proficiency}
     conn = await get_connection()
     try:
         # Verify skill by checking if a completed resource covers it
@@ -480,6 +519,8 @@ async def add_user_skill(
 
 
 async def compute_skill_gap(user_id: str, role_name: str) -> dict:
+    if MOCK_DB:
+        return {"readiness_pct": 45, "gap_score": 55, "matched": ["Python"], "missing_required": ["Apache Spark", "Kafka", "dbt"], "missing_recommended": ["Airflow", "BigQuery"]}
     """
     Compare the user's current skills against the requirements for a role.
 
@@ -547,6 +588,8 @@ async def compute_skill_gap(user_id: str, role_name: str) -> dict:
 # =============================================================================
 
 async def get_due_flashcards(user_id: str, limit: int = 10) -> list[dict]:
+    if MOCK_DB:
+        return []
     """Return flashcards due for review right now."""
     conn = await get_connection()
     try:
@@ -576,6 +619,9 @@ async def create_flashcard(
 ) -> dict:
     """Create a new flashcard for a learning resource."""
     conn = await get_connection()
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "user_id": user_id, "resource_id": resource_id, "question": question, "answer": answer, "next_review_at": "now"}
     try:
         resource = await conn.fetchrow(
             "SELECT id FROM learning_resources WHERE id = $1 AND user_id = $2",
@@ -616,6 +662,8 @@ async def update_flashcard_after_review(
         interval: rep=1→1d, rep=2→6d, rep>2→prev_interval * ef
     """
     conn = await get_connection()
+    if MOCK_DB:
+        return {"id": flashcard_id, "user_id": user_id, "quality": quality, "interval_days": 1, "next_review_at": "tomorrow"}
     try:
         if quality < 0 or quality > 5:
             return {}
@@ -671,6 +719,8 @@ async def update_flashcard_after_review(
 
 
 async def get_flashcard_stats(user_id: str) -> dict:
+    if MOCK_DB:
+        return {"total_cards": 0, "due_now": 0, "reviewed_at_least_once": 0, "avg_ease_factor": 2.5, "max_streak": 0}
     """Return flashcard review statistics for the user."""
     conn = await get_connection()
     try:
@@ -697,6 +747,8 @@ async def get_flashcard_stats(user_id: str) -> dict:
 # =============================================================================
 
 async def get_recommendation_context(user_id: str) -> dict:
+    if MOCK_DB:
+        return {"completed": [], "in_progress": [{"title": "Python Crash Course", "progress_pct": 45}, {"title": "GCP Professional Certificate", "progress_pct": 60}], "goals": [{"title": "Complete GCP certification"}], "skills": [{"skill_name": "Python", "proficiency": "intermediate"}]}
     """
     Pull all data the recommendation engine needs:
     - completed resources (what the user knows)
@@ -746,6 +798,9 @@ async def create_learning_path(
 ) -> dict:
     """Create a new learning path (the container)."""
     conn = await get_connection()
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "user_id": user_id, "title": title, "target_role": target_role, "status": "active", "estimated_weeks": estimated_weeks, "created_at": "2026-04-04", "updated_at": "2026-04-04"}
     try:
         row = await conn.fetchrow(
             """
@@ -763,6 +818,8 @@ async def create_learning_path(
 
 
 async def get_learning_resources_for_path(user_id: str) -> list[dict]:
+    if MOCK_DB:
+        return [{"id": "res-001", "title": "Python Crash Course", "resource_type": "book", "status": "in_progress", "progress_pct": 45, "tags": ["python"]}, {"id": "res-002", "title": "GCP Professional Certificate", "resource_type": "course", "status": "in_progress", "progress_pct": 60, "tags": ["gcp"]}]
     """Return user resources ordered for path construction."""
     conn = await get_connection()
     try:
@@ -796,6 +853,9 @@ async def add_path_step(
 ) -> dict:
     """Add a step (resource) to an existing learning path."""
     conn = await get_connection()
+    if MOCK_DB:
+        import uuid as _uuid
+        return {"id": str(_uuid.uuid4()), "path_id": path_id, "resource_id": resource_id, "step_order": step_order, "title": title, "why_this": why_this, "status": "pending", "estimated_hours": estimated_hours}
     try:
         row = await conn.fetchrow(
             """
@@ -817,6 +877,8 @@ async def add_path_step(
 
 
 async def get_learning_path(user_id: str, path_id: str) -> dict:
+    if MOCK_DB:
+        return {"id": path_id, "user_id": user_id, "title": "Mock Path", "status": "active", "steps": [], "progress_pct": 0}
     """Return a learning path and all its steps with resource details."""
     conn = await get_connection()
     try:
@@ -857,6 +919,8 @@ async def get_learning_path(user_id: str, path_id: str) -> dict:
 
 
 async def get_all_learning_paths(user_id: str) -> list[dict]:
+    if MOCK_DB:
+        return []
     """Return all learning paths for a user with high-level progress."""
     conn = await get_connection()
     try:
@@ -890,6 +954,8 @@ async def update_path_step_status(
 ) -> dict:
     """Mark a path step as completed, in_progress, or skipped."""
     conn = await get_connection()
+    if MOCK_DB:
+        return {"id": "step-001", "path_id": path_id, "step_order": step_order, "status": step_status}
     try:
         if status not in {"completed", "in_progress", "skipped", "pending"}:
             return {}
