@@ -41,6 +41,8 @@ ALLOYDB_HOST = os.getenv("ALLOYDB_HOST", "127.0.0.1")
 ALLOYDB_PORT = int(os.getenv("ALLOYDB_PORT", "5432"))
 ALLOYDB_DATABASE = os.getenv("ALLOYDB_DATABASE", "saarthi")
 ALLOYDB_USER = os.getenv("ALLOYDB_USER", "")  # IAM service account email
+ALLOYDB_PASSWORD = os.getenv("ALLOYDB_PASSWORD", "")  # For proxy mode
+ALLOYDB_USE_IAM = os.getenv("ALLOYDB_USE_IAM", "true").lower() == "true"
 
 
 # ── IAM token helper ──────────────────────────────────────────────────────────
@@ -77,15 +79,19 @@ async def get_connection() -> asyncpg.Connection:
     Each call opens a fresh connection. For high-throughput production use,
     swap this for a connection pool (asyncpg.create_pool) in the lifespan handler.
     """
-    iam_token = _get_iam_token()
+    if ALLOYDB_USE_IAM:
+        password = _get_iam_token()
+    else:
+        # Use proxy mode (Cloud SQL Proxy locally, or password-based auth)
+        password = ALLOYDB_PASSWORD
 
     conn = await asyncpg.connect(
         host=ALLOYDB_HOST,
         port=ALLOYDB_PORT,
         database=ALLOYDB_DATABASE,
         user=ALLOYDB_USER,
-        password=iam_token,   # IAM token used as the password
-        ssl="require",        # AlloyDB always requires SSL
+        password=password,
+        ssl="require" if ALLOYDB_USE_IAM else "prefer",  # IAM always requires SSL
     )
 
     logger.debug(
@@ -207,3 +213,4 @@ async def get_connection_local() -> asyncpg.Connection:
         password=os.getenv("ALLOYDB_PASSWORD", "postgres"),
     )
     return conn
+
