@@ -50,7 +50,7 @@ from tools.learning_tools import (
     get_calendar_events,
     find_free_slot,
 )
-from models.schemas import (
+from db.schemas import (
     AgentResponse,
     AgentStatus,
     LearningResource,

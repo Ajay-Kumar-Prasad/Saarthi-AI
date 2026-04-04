@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agents.learning_agent import run_learning_agent, learning_agent
-from models.schemas import AgentResponse
+from db.schemas import AgentResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
