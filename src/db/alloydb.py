@@ -197,20 +197,18 @@ async def query_nl(question: str, user_id: str) -> dict[str, Any]:
 
 # ── Local dev fallback ────────────────────────────────────────────────────────
 
-async def get_connection_local() -> asyncpg.Connection:
-    """
-    Password-based connection for local development without IAM.
-    Set ALLOYDB_PASSWORD in your .env for local testing.
+async def get_connection():
+    if os.getenv("ALLOYDB_USE_IAM", "false").lower() == "true":
+        password = _get_iam_token()   # only called when USE_IAM=true
+    else:
+        password = os.getenv("ALLOYDB_PASSWORD")  # plain password via proxy
 
-    Switch main.py to call this during local dev:
-        from db.alloydb import get_connection_local as get_connection
-    """
     conn = await asyncpg.connect(
-        host=ALLOYDB_HOST,
-        port=ALLOYDB_PORT,
-        database=ALLOYDB_DATABASE,
-        user=os.getenv("ALLOYDB_LOCAL_USER", "postgres"),
-        password=os.getenv("ALLOYDB_PASSWORD", "postgres"),
+        host=os.getenv("ALLOYDB_HOST"),
+        port=os.getenv("ALLOYDB_PORT"),
+        database=os.getenv("ALLOYDB_DATABASE"),
+        user=os.getenv("ALLOYDB_USER"),
+        password=password,
     )
     return conn
 
