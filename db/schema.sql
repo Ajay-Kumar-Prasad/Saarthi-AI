@@ -154,3 +154,166 @@ VALUES (
     60,
     (CURRENT_DATE + INTERVAL '30 days')::DATE
 ) ON CONFLICT DO NOTHING;
+
+-- =============================================================================
+-- FEATURE 1: SKILL GAP ANALYSIS
+-- Stores skills the user has, and skills required for career goals.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_skills (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+    skill_name      TEXT        NOT NULL,
+    category        TEXT        NOT NULL,   -- e.g. "programming" | "cloud" | "data"
+    proficiency     TEXT        NOT NULL DEFAULT 'beginner',
+    -- Values: beginner | intermediate | advanced | expert
+    verified        BOOLEAN     NOT NULL DEFAULT false,
+    -- true = backed by a completed resource or cert in learning_resources
+    source_resource_id UUID REFERENCES learning_resources(id) ON DELETE SET NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, skill_name)
+);
+
+-- Career role skill requirements (predefined, seeded below)
+CREATE TABLE IF NOT EXISTS role_skill_requirements (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role_name       TEXT        NOT NULL,   -- e.g. "Data Engineer"
+    skill_name      TEXT        NOT NULL,
+    importance      TEXT        NOT NULL DEFAULT 'required',
+    -- Values: required | recommended | optional
+    UNIQUE(role_name, skill_name)
+);
+
+
+-- =============================================================================
+-- FEATURE 2: SPACED REPETITION / FLASHCARDS
+-- Stores flashcards and tracks review schedule using SM-2 algorithm intervals.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS flashcards (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+    resource_id     UUID REFERENCES learning_resources(id) ON DELETE CASCADE,
+    question        TEXT        NOT NULL,
+    answer          TEXT        NOT NULL,
+    tags            TEXT[]      NOT NULL DEFAULT '{}',
+    -- SM-2 spaced repetition fields
+    ease_factor     NUMERIC(4,2) NOT NULL DEFAULT 2.5,  -- starts at 2.5
+    interval_days   INT          NOT NULL DEFAULT 1,     -- days until next review
+    repetitions     INT          NOT NULL DEFAULT 0,     -- times reviewed correctly
+    next_review_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_reviewed_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS flashcards_next_review_idx
+    ON flashcards(user_id, next_review_at);
+
+
+-- =============================================================================
+-- FEATURE 3 & 4: LEARNING PATHS / ROADMAPS
+-- A learning path is an ordered sequence of resources toward a specific goal.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS learning_paths (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+    title           TEXT        NOT NULL,   -- e.g. "Become a Data Engineer"
+    description     TEXT,
+    target_role     TEXT,                   -- links to role_skill_requirements
+    status          TEXT        NOT NULL DEFAULT 'active',
+    -- Values: active | completed | paused
+    estimated_weeks INT,                    -- total estimated duration
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS learning_path_steps (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    path_id         UUID REFERENCES learning_paths(id) ON DELETE CASCADE,
+    resource_id     UUID REFERENCES learning_resources(id) ON DELETE CASCADE,
+    step_order      INT         NOT NULL,   -- 1, 2, 3 ...
+    title           TEXT        NOT NULL,
+    why_this        TEXT,                   -- explains why this step matters
+    status          TEXT        NOT NULL DEFAULT 'pending',
+    -- Values: pending | in_progress | completed | skipped
+    estimated_hours INT,
+    completed_at    TIMESTAMPTZ,
+    UNIQUE(path_id, step_order)
+);
+
+
+-- =============================================================================
+-- SEED DATA
+-- =============================================================================
+
+-- Role skill requirements for common tech roles
+INSERT INTO role_skill_requirements (role_name, skill_name, importance) VALUES
+-- Data Engineer
+('Data Engineer', 'Python',             'required'),
+('Data Engineer', 'SQL',                'required'),
+('Data Engineer', 'Apache Spark',       'required'),
+('Data Engineer', 'Apache Airflow',     'required'),
+('Data Engineer', 'Data Warehousing',   'required'),
+('Data Engineer', 'ETL Pipelines',      'required'),
+('Data Engineer', 'Google BigQuery',    'recommended'),
+('Data Engineer', 'dbt',               'recommended'),
+('Data Engineer', 'Kafka',             'recommended'),
+('Data Engineer', 'Docker',            'recommended'),
+('Data Engineer', 'Cloud Platforms',   'recommended'),
+('Data Engineer', 'Git',               'optional'),
+
+-- ML Engineer
+('ML Engineer', 'Python',              'required'),
+('ML Engineer', 'Machine Learning',    'required'),
+('ML Engineer', 'Deep Learning',       'required'),
+('ML Engineer', 'TensorFlow',          'required'),
+('ML Engineer', 'PyTorch',             'required'),
+('ML Engineer', 'MLOps',               'recommended'),
+('ML Engineer', 'Docker',              'recommended'),
+('ML Engineer', 'SQL',                 'recommended'),
+('ML Engineer', 'Statistics',          'recommended'),
+
+-- Cloud Engineer
+('Cloud Engineer', 'Google Cloud Platform', 'required'),
+('Cloud Engineer', 'Terraform',            'required'),
+('Cloud Engineer', 'Kubernetes',           'required'),
+('Cloud Engineer', 'Docker',              'required'),
+('Cloud Engineer', 'Networking',          'required'),
+('Cloud Engineer', 'Python',              'recommended'),
+('Cloud Engineer', 'CI/CD',              'recommended'),
+('Cloud Engineer', 'IAM & Security',     'recommended'),
+
+-- Backend Developer
+('Backend Developer', 'Python',          'required'),
+('Backend Developer', 'REST APIs',       'required'),
+('Backend Developer', 'SQL',             'required'),
+('Backend Developer', 'Docker',          'recommended'),
+('Backend Developer', 'System Design',   'recommended'),
+('Backend Developer', 'Git',             'recommended')
+
+ON CONFLICT (role_name, skill_name) DO NOTHING;
+
+-- Demo user skills (mapped to existing demo seed data)
+INSERT INTO user_skills (user_id, skill_name, category, proficiency, verified)
+VALUES
+    ('00000000-0000-0000-0000-000000000001', 'Python',           'programming', 'intermediate', true),
+    ('00000000-0000-0000-0000-000000000001', 'SQL',              'data',        'beginner',     false),
+    ('00000000-0000-0000-0000-000000000001', 'Google Cloud Platform', 'cloud', 'intermediate', true),
+    ('00000000-0000-0000-0000-000000000001', 'Machine Learning', 'ai',          'beginner',     false)
+ON CONFLICT (user_id, skill_name) DO NOTHING;
+
+-- Demo flashcards for Python Crash Course
+INSERT INTO flashcards (user_id, resource_id, question, answer, tags)
+SELECT
+    '00000000-0000-0000-0000-000000000001',
+    id,
+    'What does a list comprehension look like in Python?',
+    '[expression for item in iterable if condition] — e.g. [x*2 for x in range(10) if x > 3]',
+    ARRAY['python', 'syntax']
+FROM learning_resources
+WHERE user_id = '00000000-0000-0000-0000-000000000001'
+  AND title = 'Python Crash Course'
+LIMIT 1
+ON CONFLICT DO NOTHING;

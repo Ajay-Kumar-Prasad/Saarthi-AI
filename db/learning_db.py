@@ -9,8 +9,12 @@ import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from db.alloydb import get_connection
-from models.schemas import LearningResource, StudySession, StudyGoal
+try:
+    from db.alloydb import get_connection
+except Exception:  # pragma: no cover - allows unit tests without AlloyDB deps
+    async def get_connection():
+        raise RuntimeError("AlloyDB dependencies are not installed.")
+from db.schemas import LearningResource, StudySession, StudyGoal
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +93,11 @@ async def update_resource_progress(
     resource_id: str, user_id: str, progress_pct: int, current_page: int | None = None
 ) -> dict:
     """Update progress percentage (and optional page) on a resource."""
+    if progress_pct < 0 or progress_pct > 100:
+        return {}
+    if current_page is not None and current_page < 0:
+        return {}
+
     conn = await get_connection()
     try:
         new_status = "completed" if progress_pct >= 100 else "in_progress"
@@ -141,6 +150,14 @@ async def create_study_session(session: StudySession) -> dict:
     """Create a study session record (after the calendar event is booked via MCP)."""
     conn = await get_connection()
     try:
+        resource = await conn.fetchrow(
+            "SELECT id FROM learning_resources WHERE id = $1 AND user_id = $2",
+            session.resource_id,
+            session.user_id,
+        )
+        if not resource:
+            return {}
+
         row = await conn.fetchrow(
             """
             INSERT INTO study_sessions
@@ -277,5 +294,620 @@ async def get_study_streak(user_id: str) -> int:
             else:
                 break
         return streak
+    finally:
+        await conn.close()
+
+
+async def query_learning_history_safe(user_id: str, question: str) -> dict:
+    """
+    Safely run AlloyDB NL-to-SQL for the learning domain.
+    Allows only single SELECT statements and blocks suspicious SQL.
+    """
+    conn = await get_connection()
+    try:
+        scoped_question = f"For user_id={user_id} in learning domain only: {question}"
+        nl_result = await conn.fetch(
+            "SELECT google_ml.nl_to_sql($1, 'saarthi_schema')",
+            scoped_question,
+        )
+        generated_sql = (nl_result[0][0] or "").strip() if nl_result else ""
+        lower = generated_sql.lower()
+
+        if not generated_sql:
+            return {
+                "question": question,
+                "generated_sql": None,
+                "results": [],
+                "error": "No SQL generated from query.",
+            }
+
+        if not lower.startswith("select") or ";" in generated_sql:
+            return {
+                "question": question,
+                "generated_sql": generated_sql,
+                "results": [],
+                "error": "Unsafe SQL blocked. Only single SELECT statements are allowed.",
+            }
+
+        blocked_keywords = (
+            "insert ",
+            "update ",
+            "delete ",
+            "drop ",
+            "alter ",
+            "create ",
+            "grant ",
+            "revoke ",
+        )
+        if any(k in lower for k in blocked_keywords):
+            return {
+                "question": question,
+                "generated_sql": generated_sql,
+                "results": [],
+                "error": "Unsafe SQL blocked.",
+            }
+
+        if "user_id" not in lower:
+            return {
+                "question": question,
+                "generated_sql": generated_sql,
+                "results": [],
+                "error": "Query was not user-scoped; blocked for safety.",
+            }
+
+        rows = await conn.fetch(generated_sql)
+        return {
+            "question": question,
+            "generated_sql": generated_sql,
+            "results": [dict(r) for r in rows],
+            "row_count": len(rows),
+        }
+    except Exception as exc:
+        logger.error("Safe NL query failed: %s", exc)
+        return {
+            "question": question,
+            "generated_sql": None,
+            "results": [],
+            "error": str(exc),
+        }
+    finally:
+        await conn.close()
+
+"""
+Covers 4 new features:
+  1. Skill gap analysis    — user_skills + role_skill_requirements tables
+  2. Spaced repetition     — flashcards table (SM-2 algorithm)
+  3. Course recommendations— queries existing learning_resources + user_skills
+  4. Learning paths        — learning_paths + learning_path_steps tables
+
+"""
+
+# =============================================================================
+# FEATURE 1 — SKILL GAP ANALYSIS
+# =============================================================================
+
+async def get_user_skills(user_id: str) -> list[dict]:
+    """Return all skills the user currently has."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT us.*, lr.title AS source_resource_title
+            FROM user_skills us
+            LEFT JOIN learning_resources lr ON lr.id = us.source_resource_id
+            WHERE us.user_id = $1
+            ORDER BY us.category, us.skill_name
+            """,
+            user_id,
+        )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def get_role_requirements(role_name: str) -> list[dict]:
+    """Return all skills required for a given career role."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM role_skill_requirements
+            WHERE LOWER(role_name) = LOWER($1)
+            ORDER BY
+                CASE importance
+                    WHEN 'required'    THEN 1
+                    WHEN 'recommended' THEN 2
+                    WHEN 'optional'    THEN 3
+                END
+            """,
+            role_name,
+        )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def get_available_roles() -> list[str]:
+    """Return all roles that have skill requirements defined."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            "SELECT DISTINCT role_name FROM role_skill_requirements ORDER BY role_name"
+        )
+        return [r["role_name"] for r in rows]
+    finally:
+        await conn.close()
+
+
+async def add_user_skill(
+    user_id: str,
+    skill_name: str,
+    category: str,
+    proficiency: str = "beginner",
+    source_resource_id: str | None = None,
+) -> dict:
+    """Add or update a skill for the user."""
+    conn = await get_connection()
+    try:
+        # Verify skill by checking if a completed resource covers it
+        verified = False
+        if source_resource_id:
+            row = await conn.fetchrow(
+                "SELECT status FROM learning_resources WHERE id = $1 AND user_id = $2",
+                source_resource_id, user_id,
+            )
+            verified = row is not None and row["status"] == "completed"
+
+        row = await conn.fetchrow(
+            """
+            INSERT INTO user_skills
+                (id, user_id, skill_name, category, proficiency,
+                 verified, source_resource_id, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+            ON CONFLICT (user_id, skill_name) DO UPDATE
+                SET proficiency        = EXCLUDED.proficiency,
+                    verified           = EXCLUDED.verified,
+                    source_resource_id = EXCLUDED.source_resource_id,
+                    updated_at         = now()
+            RETURNING *
+            """,
+            str(uuid4()), user_id, skill_name, category,
+            proficiency, verified, source_resource_id,
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def compute_skill_gap(user_id: str, role_name: str) -> dict:
+    """
+    Compare the user's current skills against the requirements for a role.
+
+    Returns:
+        {
+          "role": str,
+          "required_skills": list,
+          "user_skills": list,
+          "missing_required": list,    ← must learn these
+          "missing_recommended": list, ← should learn these
+          "gap_score": int,            ← 0-100, higher = more gaps
+          "matched": list,             ← already have these
+        }
+    """
+    conn = await get_connection()
+    try:
+        # All role requirements
+        requirements = await conn.fetch(
+            """
+            SELECT skill_name, importance
+            FROM role_skill_requirements
+            WHERE LOWER(role_name) = LOWER($1)
+            """,
+            role_name,
+        )
+
+        # User's current skills (lowercase for comparison)
+        user_skills_rows = await conn.fetch(
+            "SELECT skill_name, proficiency FROM user_skills WHERE user_id = $1",
+            user_id,
+        )
+        user_skill_names = {r["skill_name"].lower() for r in user_skills_rows}
+
+        missing_required    = []
+        missing_recommended = []
+        matched             = []
+
+        for req in requirements:
+            skill = req["skill_name"]
+            if skill.lower() in user_skill_names:
+                matched.append(skill)
+            elif req["importance"] == "required":
+                missing_required.append(skill)
+            elif req["importance"] == "recommended":
+                missing_recommended.append(skill)
+
+        total = len(requirements)
+        gap_score = int((len(missing_required) + len(missing_recommended) * 0.5) / max(total, 1) * 100)
+
+        return {
+            "role": role_name,
+            "total_skills_required": total,
+            "matched": matched,
+            "missing_required": missing_required,
+            "missing_recommended": missing_recommended,
+            "gap_score": gap_score,             # 0 = no gap, 100 = complete gap
+            "readiness_pct": 100 - gap_score,
+        }
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# FEATURE 2 — SPACED REPETITION (SM-2 Algorithm)
+# =============================================================================
+
+async def get_due_flashcards(user_id: str, limit: int = 10) -> list[dict]:
+    """Return flashcards due for review right now."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT f.*, lr.title AS resource_title
+            FROM flashcards f
+            JOIN learning_resources lr ON lr.id = f.resource_id
+            WHERE f.user_id = $1
+              AND f.next_review_at <= now()
+            ORDER BY f.next_review_at ASC
+            LIMIT $2
+            """,
+            user_id, limit,
+        )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def create_flashcard(
+    user_id: str,
+    resource_id: str,
+    question: str,
+    answer: str,
+    tags: list[str] | None = None,
+) -> dict:
+    """Create a new flashcard for a learning resource."""
+    conn = await get_connection()
+    try:
+        resource = await conn.fetchrow(
+            "SELECT id FROM learning_resources WHERE id = $1 AND user_id = $2",
+            resource_id,
+            user_id,
+        )
+        if not resource:
+            return {}
+
+        row = await conn.fetchrow(
+            """
+            INSERT INTO flashcards
+                (id, user_id, resource_id, question, answer, tags)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            str(uuid4()), user_id, resource_id, question, answer,
+            tags or [],
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def update_flashcard_after_review(
+    flashcard_id: str,
+    user_id: str,
+    quality: int,           # 0-5 (SM-2 scale): 0=blackout, 3=correct, 5=perfect
+) -> dict:
+    """
+    Apply the SM-2 spaced repetition algorithm after a review.
+    quality: 0-2 = incorrect/hard, 3-4 = correct, 5 = perfect
+
+    SM-2 rules:
+      - If quality < 3: reset repetitions to 0, interval = 1 day
+      - If quality >= 3: update ease_factor and interval
+        new_ef = ef + (0.1 - (5-q) * (0.08 + (5-q) * 0.02))
+        interval: rep=1→1d, rep=2→6d, rep>2→prev_interval * ef
+    """
+    conn = await get_connection()
+    try:
+        if quality < 0 or quality > 5:
+            return {}
+
+        card = await conn.fetchrow(
+            "SELECT * FROM flashcards WHERE id = $1 AND user_id = $2",
+            flashcard_id, user_id,
+        )
+        if not card:
+            return {}
+
+        ef          = float(card["ease_factor"])
+        repetitions = card["repetitions"]
+        interval    = card["interval_days"]
+
+        if quality < 3:
+            # Incorrect — reset
+            repetitions = 0
+            interval    = 1
+        else:
+            # Correct — apply SM-2
+            ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+            ef = max(1.3, round(ef, 2))     # never drop below 1.3
+
+            if repetitions == 0:
+                interval = 1
+            elif repetitions == 1:
+                interval = 6
+            else:
+                interval = round(interval * ef)
+
+            repetitions += 1
+
+        next_review = datetime.utcnow() + timedelta(days=interval)
+
+        row = await conn.fetchrow(
+            """
+            UPDATE flashcards
+            SET ease_factor      = $1,
+                interval_days    = $2,
+                repetitions      = $3,
+                next_review_at   = $4,
+                last_reviewed_at = now()
+            WHERE id = $5 AND user_id = $6
+            RETURNING *
+            """,
+            ef, interval, repetitions, next_review,
+            flashcard_id, user_id,
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def get_flashcard_stats(user_id: str) -> dict:
+    """Return flashcard review statistics for the user."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)                                        AS total_cards,
+                COUNT(*) FILTER (WHERE next_review_at <= now()) AS due_now,
+                COUNT(*) FILTER (WHERE repetitions > 0)        AS reviewed_at_least_once,
+                ROUND(AVG(ease_factor), 2)                      AS avg_ease_factor,
+                MAX(repetitions)                                AS max_streak
+            FROM flashcards
+            WHERE user_id = $1
+            """,
+            user_id,
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# FEATURE 3 — COURSE RECOMMENDATIONS
+# =============================================================================
+
+async def get_recommendation_context(user_id: str) -> dict:
+    """
+    Pull all data the recommendation engine needs:
+    - completed resources (what the user knows)
+    - in_progress resources (what they're doing)
+    - active goals (where they want to go)
+    - user skills (current proficiency map)
+    - skill gaps if they have a goal role
+    """
+    conn = await get_connection()
+    try:
+        completed = await conn.fetch(
+            "SELECT title, tags FROM learning_resources WHERE user_id=$1 AND status='completed'",
+            user_id,
+        )
+        in_progress = await conn.fetch(
+            "SELECT title, progress_pct, tags FROM learning_resources WHERE user_id=$1 AND status='in_progress'",
+            user_id,
+        )
+        goals = await conn.fetch(
+            "SELECT title, target_date, weekly_hours_target FROM study_goals WHERE user_id=$1 AND status='active'",
+            user_id,
+        )
+        skills = await conn.fetch(
+            "SELECT skill_name, proficiency FROM user_skills WHERE user_id=$1",
+            user_id,
+        )
+        return {
+            "completed":   [dict(r) for r in completed],
+            "in_progress": [dict(r) for r in in_progress],
+            "goals":       [dict(r) for r in goals],
+            "skills":      [dict(r) for r in skills],
+        }
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# FEATURE 4 — LEARNING PATHS
+# =============================================================================
+
+async def create_learning_path(
+    user_id: str,
+    title: str,
+    description: str,
+    target_role: str | None,
+    estimated_weeks: int | None,
+) -> dict:
+    """Create a new learning path (the container)."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO learning_paths
+                (id, user_id, title, description, target_role, estimated_weeks)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            str(uuid4()), user_id, title, description,
+            target_role, estimated_weeks,
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def get_learning_resources_for_path(user_id: str) -> list[dict]:
+    """Return user resources ordered for path construction."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT id, title, resource_type, status, progress_pct, tags
+            FROM learning_resources
+            WHERE user_id = $1
+            ORDER BY
+                CASE status
+                    WHEN 'completed'   THEN 1
+                    WHEN 'in_progress' THEN 2
+                    WHEN 'not_started' THEN 3
+                    WHEN 'paused'      THEN 4
+                END
+            """,
+            user_id,
+        )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def add_path_step(
+    path_id: str,
+    resource_id: str,
+    step_order: int,
+    title: str,
+    why_this: str,
+    estimated_hours: int,
+) -> dict:
+    """Add a step (resource) to an existing learning path."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO learning_path_steps
+                (id, path_id, resource_id, step_order, title, why_this, estimated_hours)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (path_id, step_order) DO UPDATE
+                SET title           = EXCLUDED.title,
+                    why_this        = EXCLUDED.why_this,
+                    estimated_hours = EXCLUDED.estimated_hours
+            RETURNING *
+            """,
+            str(uuid4()), path_id, resource_id,
+            step_order, title, why_this, estimated_hours,
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def get_learning_path(user_id: str, path_id: str) -> dict:
+    """Return a learning path and all its steps with resource details."""
+    conn = await get_connection()
+    try:
+        path = await conn.fetchrow(
+            "SELECT * FROM learning_paths WHERE id = $1 AND user_id = $2",
+            path_id, user_id,
+        )
+        if not path:
+            return {}
+
+        steps = await conn.fetch(
+            """
+            SELECT lps.*, lr.title AS resource_title,
+                   lr.status AS resource_status,
+                   lr.progress_pct, lr.resource_type, lr.url
+            FROM learning_path_steps lps
+            JOIN learning_resources lr ON lr.id = lps.resource_id
+            WHERE lps.path_id = $1
+            ORDER BY lps.step_order ASC
+            """,
+            path_id,
+        )
+
+        total_hours    = sum(s["estimated_hours"] or 0 for s in steps)
+        completed_steps = sum(1 for s in steps if s["status"] == "completed")
+        progress_pct    = int(completed_steps / max(len(steps), 1) * 100)
+
+        return {
+            **dict(path),
+            "steps":          [dict(s) for s in steps],
+            "total_steps":    len(steps),
+            "completed_steps": completed_steps,
+            "progress_pct":   progress_pct,
+            "total_hours":    total_hours,
+        }
+    finally:
+        await conn.close()
+
+
+async def get_all_learning_paths(user_id: str) -> list[dict]:
+    """Return all learning paths for a user with high-level progress."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT lp.*,
+                COUNT(lps.id)                                           AS total_steps,
+                COUNT(lps.id) FILTER (WHERE lps.status = 'completed')  AS completed_steps
+            FROM learning_paths lp
+            LEFT JOIN learning_path_steps lps ON lps.path_id = lp.id
+            WHERE lp.user_id = $1
+            GROUP BY lp.id
+            ORDER BY lp.created_at DESC
+            """,
+            user_id,
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            total = d["total_steps"] or 0
+            done  = d["completed_steps"] or 0
+            d["progress_pct"] = int(done / max(total, 1) * 100)
+            result.append(d)
+        return result
+    finally:
+        await conn.close()
+
+
+async def update_path_step_status(
+    user_id: str, path_id: str, step_order: int, status: str
+) -> dict:
+    """Mark a path step as completed, in_progress, or skipped."""
+    conn = await get_connection()
+    try:
+        if status not in {"completed", "in_progress", "skipped", "pending"}:
+            return {}
+
+        completed_at = datetime.utcnow() if status == "completed" else None
+        row = await conn.fetchrow(
+            """
+            UPDATE learning_path_steps lps
+            SET status = $1, completed_at = $2
+            FROM learning_paths lp
+            WHERE lps.path_id = lp.id
+              AND lps.path_id = $3
+              AND lps.step_order = $4
+              AND lp.user_id = $5
+            RETURNING lps.*
+            """,
+            status, completed_at, path_id, step_order, user_id,
+        )
+        return dict(row) if row else {}
     finally:
         await conn.close()

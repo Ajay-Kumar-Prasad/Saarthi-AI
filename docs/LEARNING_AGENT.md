@@ -10,7 +10,7 @@
 1. [What This Agent Does](#1-what-this-agent-does)
 2. [Files You Own](#2-files-you-own)
 3. [How the Agent Works — Full Workflow](#3-how-the-agent-works--full-workflow)
-4. [The 9 Tools — What Each One Does](#4-the-9-tools--what-each-one-does)
+4. [The 13 Tools — What Each One Does](#4-the-13-tools--what-each-one-does)
 5. [The 3 Database Tables](#5-the-3-database-tables)
 6. [MCP Tool Integrations](#6-mcp-tool-integrations)
 7. [Conflict Detection Rules](#7-conflict-detection-rules)
@@ -40,13 +40,14 @@ everything related to the user's learning journey:
 ## 2. Files You Own
 
 ```
-agents/learning_agent.py      ← THE AGENT — ADK definition + all 9 tool functions
+agents/learning_agent.py      ← THE AGENT — ADK definition + 13 tool functions + orchestration path
 tools/learning_tools.py       ← MCP wrappers for Calendar and Notes servers
-db/learning_db.py             ← AlloyDB CRUD for your 3 tables
+db/learning_db.py             ← AlloyDB CRUD + skill-gap + flashcards + learning-path logic
 db/alloydb.py                 ← Shared DB connection + NL-to-SQL utility
-db/schema.sql                 ← SQL for users + your 3 tables + seed data
-models/schemas.py             ← Pydantic models (AgentResponse + Learning schemas)
-tests/test_learning_agent.py  ← 10 unit tests (run with MOCK_MCP=true)
+db/schema.sql                 ← SQL for users + learning tables + seed data
+db/schemas.py                 ← Pydantic models (AgentResponse + Learning schemas)
+tests/test_learning.py        ← learning-agent unit tests
+tests/conftest.py             ← async test runner + path bootstrap
 main.py                       ← FastAPI routes: /learning/chat, /learning/status, etc.
 ```
 
@@ -87,7 +88,7 @@ the response is returned. Every step maps to real code in your files.
 │  Gemini 2.0 Flash reads:                                            │
 │    1. The LEARNING_AGENT_INSTRUCTION (the system prompt)            │
 │    2. The user message                                              │
-│    3. The docstrings of all 9 tool functions                        │
+│    3. The docstrings of all 13 tool functions                       │
 │                                                                     │
 │  It decides: "This needs tool_schedule_study_session"               │
 │  (because the docstring says: use when user says 'schedule study')  │
@@ -146,9 +147,22 @@ the response is returned. Every step maps to real code in your files.
   (or to the Orchestrator if called as a sub-agent)
 ```
 
+### Deterministic orchestration for role-goal intents
+
+For messages like `"I want to become a Data Engineer"`, `run_learning_agent`
+now uses an internal chained flow before ADK free-form reasoning:
+
+1. `tool_analyze_skill_gap`
+2. `tool_recommend_resources`
+3. `tool_create_learning_path(action="create")`
+4. `tool_schedule_study_session` for the first path step (next day)
+
+This returns one unified `AgentResponse` with `actions_taken`, `conflicts`,
+and structured `data` including gap, recommendations, path, and first session.
+
 ---
 
-## 4. The 9 Tools — What Each One Does
+## 4. The 13 Tools — What Each One Does
 
 These are Python `async def` functions inside `agents/learning_agent.py`.
 Google ADK reads their **docstrings** to decide which one to call.
@@ -165,6 +179,19 @@ You never hardcode "if user says X, call tool Y" — Gemini reasons about it.
 | `tool_mark_session_done` | "Done with today's study" / "Completed my session" | Sets `completed = true` in `study_sessions` table |
 | `tool_query_learning_history` | "How many hours last month?" / "Which courses have I paused?" | Sends natural language to AlloyDB AI → auto-generates SQL → returns results |
 | `tool_create_study_goal` | "I want to finish the GCP cert in 30 days" | Inserts a row into `study_goals` table |
+| `tool_analyze_skill_gap` | "What am I missing for Data Engineer?" | Compares `user_skills` vs `role_skill_requirements` |
+| `tool_schedule_flashcard_review` | "What cards are due?" / "Create card" / "Review card" | Due/create/review with SM-2 spaced repetition |
+| `tool_recommend_resources` | "What should I study next?" | Builds recommendation context from resources/goals/skills/gap |
+| `tool_create_learning_path` | "Create/show/update my roadmap" | Creates, views, and updates structured learning paths |
+
+### New reliability improvements (latest)
+
+- Input validation now exists across tools (progress range, quality range, required IDs, date checks).
+- Study session scheduling now supports rollback: if DB save fails, calendar event delete is attempted.
+- Learning-path step updates now enforce ownership via `user_id`.
+- Natural-language DB querying is guarded by `query_learning_history_safe` (single SELECT-only policy).
+- `run_learning_agent` has a deterministic orchestration path for intents like:
+  `"I want to become a Data Engineer"` (gap → recommendations → path → first session scheduling).
 
 ### Why docstrings matter
 
@@ -256,6 +283,10 @@ find_free_slot(user_id, date, duration_minutes)
 create_study_calendar_event(user_id, title, start_time, duration_minutes)
   → POST {MCP_CALENDAR_URL}/events/create
   → Returns { event_id, html_link, start, end }
+
+delete_calendar_event(user_id, event_id)
+  → POST {MCP_CALENDAR_URL}/events/delete
+  → Used for rollback if DB write fails after event creation
 ```
 
 ### Notes MCP
@@ -316,7 +347,7 @@ is useful. `"conflict detected"` is not.
 ## 8. The AgentResponse Contract
 
 Every sub-agent in Saarthi AI must return this exact schema.
-Defined in `models/schemas.py`. The Orchestrator depends on it.
+Defined in `db/schemas.py`. The Orchestrator depends on it.
 
 ```python
 class AgentResponse(BaseModel):
@@ -371,6 +402,15 @@ class AgentResponse(BaseModel):
   }
 }
 ```
+
+### Invalid model output fallback
+
+If ADK/Gemini returns non-JSON output, `run_learning_agent` now still returns
+a valid `AgentResponse` with:
+
+- `status = "partial"`
+- `summary = "Model response was not valid AgentResponse JSON."`
+- `data.raw_text` containing the original model output
 
 ---
 
@@ -431,11 +471,12 @@ uvicorn main:app --reload --port 8080
 ### Run tests
 
 ```bash
-MOCK_MCP=true pytest tests/ -v
+MOCK_MCP=true pytest tests/test_learning.py -v
 ```
 
-All 10 tests should pass. They mock the AlloyDB connection and use
-`MOCK_MCP=true` so no external services are needed.
+Current learning suite should pass with local mocks. The tests patch DB
+connections, run async test functions, and include negative cases for invalid
+input, missing data, and unauthorized resource ownership.
 
 ### Manual curl tests
 

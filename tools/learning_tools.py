@@ -31,7 +31,10 @@ async def _post(base_url: str, path: str, payload: dict) -> dict:
     async with httpx.AsyncClient(timeout=MCP_TIMEOUT) as client:
         resp = await client.post(f"{base_url}{path}", json=payload)
         resp.raise_for_status()
-        return resp.json()
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise ValueError(f"Invalid MCP response from {path}: expected object")
+        return body
 
 
 # ── Notes MCP ─────────────────────────────────────────────────────────────────
@@ -175,7 +178,29 @@ async def get_calendar_events(
             params={"user_id": user_id, "date": date},
         )
         resp.raise_for_status()
-        return resp.json().get("events", [])
+        body = resp.json()
+        if not isinstance(body, dict):
+            return []
+        events = body.get("events", [])
+        return events if isinstance(events, list) else []
+
+
+async def delete_calendar_event(user_id: str, event_id: str) -> dict:
+    """
+    Delete a calendar event by ID. Used for rollback when DB save fails.
+    """
+    if MOCK_MCP:
+        logger.info("[MOCK] Deleting calendar event: %s", event_id)
+        return {"deleted": True, "event_id": event_id}
+
+    if not event_id:
+        return {"deleted": False, "error": "event_id is required"}
+
+    return await _post(
+        MCP_CALENDAR_URL,
+        "/events/delete",
+        {"user_id": user_id, "event_id": event_id},
+    )
 
 
 async def find_free_slot(
@@ -205,9 +230,9 @@ async def find_free_slot(
 
     busy.sort()
 
-    # Working window: 6am – 10pm
-    window_start = 6.0 if not prefer_morning else 6.0
-    window_end = 22.0
+    # Working window: 6am - 10pm (or 6am - noon for morning preference).
+    window_start = 6.0
+    window_end = 12.0 if prefer_morning else 22.0
     slot_hours = duration_minutes / 60
 
     candidate = window_start
