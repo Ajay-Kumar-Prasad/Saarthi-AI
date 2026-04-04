@@ -1,14 +1,8 @@
 """
 Saarthi AI — FastAPI application entrypoint for the Health Agent.
 
-This file is the Health Agent owner's responsibility to wire up fully.
-As the Health Agent owner, you contribute:
-  - /health/* routes (defined here)
-  - /auth/* routes (Google OAuth2 for Google Fit access)
-  - The /chat endpoint calls the full orchestrator (defined by Member 2)
-
 For solo testing of just your agent, run:
-    uvicorn health_main:app --reload --port 8081
+    uvicorn health_agent.main:app --reload --port 8081
 
 Then hit:
     GET  /auth/google/login?user_id=<uuid>
@@ -20,6 +14,7 @@ Then hit:
     POST /health/query
 """
 
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -27,10 +22,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agents.health_agent import run_health_agent, health_agent, sync_all_health_data
-from auth.google_oauth import router as auth_router
 from db.health_db import build_health_summary
+
+from db.database import init_db
 from models.schemas import AgentResponse
+from agents.health_agent import run_health_agent, tool_get_agent_status, sync_all_health_data
+from auth.google_oauth import router as auth_router, is_user_authenticated
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +36,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Saarthi AI — Health Agent service starting")
+    await init_db()
+    logger.info("AlloyDB pool ready.")
     yield
     logger.info("Saarthi AI — Health Agent shutting down")
 
@@ -77,6 +76,11 @@ class StatusRequest(BaseModel):
     days: int = 7
 
 
+class SyncRequest(BaseModel):
+    user_id: str = "00000000-0000-0000-0000-000000000001"
+    days: int = 30
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -110,14 +114,8 @@ async def get_status(req: StatusRequest):
     Quick status endpoint — returns the health summary without an LLM call.
     Useful for the Streamlit dashboard sidebar or the orchestrator's health check.
     """
-    import json
     summary = await build_health_summary(req.user_id, days=req.days)
     return json.loads(summary.model_dump_json())
-
-
-class SyncRequest(BaseModel):
-    user_id: str = "00000000-0000-0000-0000-000000000001"
-    days: int = 30
 
 
 @app.post("/health/sync")
