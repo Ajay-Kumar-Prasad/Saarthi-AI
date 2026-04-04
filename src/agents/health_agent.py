@@ -14,13 +14,9 @@ Data flow:
     Google Fit API is called ONCE during user onboarding (after OAuth callback).
     All data is persisted to AlloyDB at that point.
     During chat the agent reads ONLY from AlloyDB — no API calls at runtime.
- 
+
     If the user explicitly asks to refresh / sync their data, the agent
     calls tool_sync_health_data which re-hits the Fit API and updates AlloyDB.
-
-MCP / External tools used:
-    - Health MCP    → save_health_snapshot, get_health_snapshot
-    - Calendar MCP  → get_calendar_events (conflict detection)
 
 Database:
     - health_tokens        — Google OAuth2 access/refresh tokens per user
@@ -35,10 +31,23 @@ Returns:
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
-from google.adk.agents import Agent
-from google.adk.runners import Runner
+try:
+    from google.adk.agents import Agent
+    from google.adk.runners import Runner
+except Exception:  # pragma: no cover - allows unit tests without ADK installed
+    class Agent:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class Runner:  # type: ignore
+        def __init__(self, agent):
+            self.agent = agent
+
+        async def run(self, user_message: str, context: dict):
+            raise RuntimeError("google-adk is required to run the live agent")
 
 from tools.google_fit import (
     fetch_sleep_data,
@@ -56,7 +65,6 @@ from db.health_db import (
     get_activity_summary_from_db,
     get_daily_metrics_from_db,
 )
-from db.alloydb import query_nl
 from models.schemas import (
     AgentResponse,
     AgentStatus,
@@ -239,7 +247,7 @@ async def tool_analyze_health_trends(user_id: str, days: int = 14) -> str:
         avg_steps = int(summary.avg_steps)
         if avg_steps < 7500:
             insights.append(
-                f"Average daily steps ({avg_steps:,}) is below the recommended 7,500–10,000."
+                f"Average daily steps ({avg_steps:,}) is below the recommended 7,500-10,000."
             )
             conflicts.append(f"low_step_count: avg {avg_steps:,} steps/day")
         else:
@@ -293,25 +301,6 @@ async def tool_analyze_health_trends(user_id: str, days: int = 14) -> str:
     }, default=str)
 
 
-async def tool_query_health_history(user_id: str, question: str) -> str:
-    """
-    Query the user's health history using AlloyDB AI natural language.
-    Use for questions like: 'How many times did I work out last month?',
-    'What was my average sleep duration in March?', 'Show my step count trend'.
-    Reads directly from AlloyDB — no API call needed.
-
-    Args:
-        user_id:  The user's UUID string.
-        question: Natural language question about their health history.
-
-    Returns:
-        JSON string with keys: question, generated_sql, results.
-    """
-    scoped_question = f"For user {user_id}: {question}"
-    result = await query_nl(scoped_question, user_id)
-    return json.dumps(result, default=str)
-
-
 async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
     """
     Manually re-sync health data from Google Fit and update AlloyDB.
@@ -356,7 +345,11 @@ async def tool_get_agent_status(user_id: str) -> str:
         parts.append(f"{summary.total_active_minutes} active mins total")
     if summary.avg_resting_heart_rate:
         parts.append(f"resting HR {summary.avg_resting_heart_rate} bpm")
-    one_line = f"Health (last 7d): {', '.join(parts)}." if parts else "Health: no data yet — user needs to sync."
+    one_line = (
+        f"Health (last 7d): {', '.join(parts)}."
+        if parts
+        else "Health: no data yet — user needs to sync."
+    )
 
     response = AgentResponse(
         agent="health_agent",
@@ -399,7 +392,6 @@ YOUR TOOLS:
 - tool_get_daily_metrics_from_db  → read steps/calories/active minutes from AlloyDB
 - tool_get_health_summary         → aggregate all stored data into a full summary
 - tool_analyze_health_trends      → cross-domain trend analysis + conflict detection
-- tool_query_health_history       → natural language query via AlloyDB AI
 - tool_sync_health_data           → re-pull from Google Fit (only on explicit user request)
 - tool_get_agent_status           → structured AgentResponse for the orchestrator
 
@@ -408,7 +400,6 @@ TOOL CALL GUIDELINES:
 - "Show me my workouts" → call tool_get_activity_from_db
 - "How many steps?" → call tool_get_daily_metrics_from_db
 - "How am I doing overall?" → call tool_get_health_summary then tool_analyze_health_trends
-- "How many times did I work out last month?" → call tool_query_health_history
 - "Refresh / sync my data" → call tool_sync_health_data (rare — only on explicit request)
 - Orchestrator status request → call tool_get_agent_status
 
@@ -442,7 +433,7 @@ observations and general wellness guidance only.
 
 health_agent = Agent(
     name="health_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     description=(
         "Manages the user's physical health — sleep tracking, fitness activities, "
         "step counts, calories, and heart rate. Reads from AlloyDB (populated during "
@@ -457,20 +448,29 @@ health_agent = Agent(
         tool_get_daily_metrics_from_db,
         tool_get_health_summary,
         tool_analyze_health_trends,
-        tool_query_health_history,
         tool_sync_health_data,
         tool_get_agent_status,
     ],
 )
 
 
-# ── Standalone Runner (for testing without the orchestrator) ───────────────────
+# ── Standalone Runner ──────────────────────────────────────────────────────────
 
 async def run_health_agent(message: str, user_id: str) -> AgentResponse:
     """
     Run the Health Agent directly (used for unit tests and the demo endpoint).
     In production the orchestrator calls this agent via sub_agents=[health_agent].
     """
+    if not user_id:
+        return AgentResponse(
+            agent="health_agent",
+            status=AgentStatus.ERROR,
+            summary="Missing required user_id.",
+            conflicts=[],
+            actions_taken=[],
+            data=None,
+        )
+
     runner = Runner(agent=health_agent)
     try:
         result = await runner.run(
@@ -482,9 +482,6 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
             raw = json.loads(result.text)
             return AgentResponse(**raw)
         except (json.JSONDecodeError, ValueError):
-            # Agent returned non-JSON text — wrap it so the contract is never broken.
-            # This is a model compliance issue; the instruction tells Gemini to always
-            # return JSON. Log it so it can be caught and fixed.
             logger.warning(
                 "[run_health_agent] Agent returned non-JSON response. "
                 "Check HEALTH_AGENT_INSTRUCTION. Raw text: %s",
