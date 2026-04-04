@@ -31,23 +31,34 @@ Returns:
 
 import json
 import logging
-import os
+import re
 from datetime import datetime, timezone
 
 try:
     from google.adk.agents import Agent
     from google.adk.runners import Runner
-except Exception:  # pragma: no cover - allows unit tests without ADK installed
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types as genai_types
+    _ADK_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _ADK_AVAILABLE = False
+
     class Agent:  # type: ignore
         def __init__(self, *args, **kwargs):
             pass
 
     class Runner:  # type: ignore
-        def __init__(self, agent):
+        def __init__(self, agent, app_name="", session_service=None):
             self.agent = agent
 
-        async def run(self, user_message: str, context: dict):
+        async def run_async(self, user_id, session_id, new_message):
             raise RuntimeError("google-adk is required to run the live agent")
+
+    class InMemorySessionService:  # type: ignore
+        async def create_session(self, app_name, user_id):
+            class _S:
+                id = "stub-session"
+            return _S()
 
 from tools.google_fit import (
     fetch_sleep_data,
@@ -113,6 +124,23 @@ async def sync_all_health_data(user_id: str, days: int = 30) -> dict:
         "heart_rate_days_saved": len(hr_data),
         "period_days": days,
     }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _strip_code_fences(text: str) -> str:
+    """
+    Remove markdown code fences that Gemini sometimes wraps JSON in.
+    Handles ```json ... ``` and plain ``` ... ``` blocks.
+    Falls back to the original text if no fences are detected.
+    """
+    text = text.strip()
+    match = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text)
+    if match:
+        return match.group(1).strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 # ── ADK Tool Functions ─────────────────────────────────────────────────────────
@@ -376,6 +404,12 @@ Your domain: everything related to the user's physical health.
 This includes sleep tracking, fitness activities, daily step counts,
 calorie burn, resting heart rate, and recovery trends.
 
+CRITICAL — USER IDENTIFICATION:
+Every message starts with a prefix in the format: [user_id: <value>]
+You MUST extract this value and pass it as the `user_id` argument to EVERY tool call.
+Never call a tool without setting user_id from this prefix. Never invent or guess a user_id.
+Example: "[user_id: abc123]\n\nHow many steps did I take?" → all tools get user_id="abc123"
+
 IMPORTANT — DATA ARCHITECTURE:
 Your data comes from AlloyDB, NOT from Google Fit directly at chat time.
 When the user first connects their account (OAuth onboarding), their Google Fit
@@ -400,7 +434,7 @@ TOOL CALL GUIDELINES:
 - "Show me my workouts" → call tool_get_activity_from_db
 - "How many steps?" → call tool_get_daily_metrics_from_db
 - "How am I doing overall?" → call tool_get_health_summary then tool_analyze_health_trends
-- "Refresh / sync my data" → call tool_sync_health_data (rare — only on explicit request)
+- "Refresh / sync my data" → call tool_sync_health_data (rare ��� only on explicit request)
 - Orchestrator status request → call tool_get_agent_status
 
 CONFLICT DETECTION RULES — detect and flag these:
@@ -460,6 +494,11 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
     """
     Run the Health Agent directly (used for unit tests and the demo endpoint).
     In production the orchestrator calls this agent via sub_agents=[health_agent].
+
+    Uses the official ADK Runner API:
+        Runner(agent=..., app_name=..., session_service=...)
+        session_service.create_session(app_name=..., user_id=...)
+        runner.run_async(user_id=..., session_id=..., new_message=types.Content(...))
     """
     if not user_id:
         return AgentResponse(
@@ -471,30 +510,69 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
             data=None,
         )
 
-    runner = Runner(agent=health_agent)
+    APP_NAME = "health_agent"
+
+    session_service = InMemorySessionService()
+    session = await session_service.create_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+    )
+
+    runner = Runner(
+        agent=health_agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+
     try:
-        result = await runner.run(
-            user_message=message,
-            context={"user_id": user_id},
+        # Prepend user_id so Gemini always knows which user to pass to tool functions.
+        # Without this, Gemini guesses or passes an empty string → DB returns 0 rows.
+        injected_message = f"[user_id: {user_id}]\n\n{message}"
+
+        new_message = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=injected_message)],
         )
 
+        response_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=new_message,
+        ):
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    response_text = event.content.parts[0].text
+                break
+
+        clean_text = _strip_code_fences(response_text)
         try:
-            raw = json.loads(result.text)
+            raw = json.loads(clean_text)
             return AgentResponse(**raw)
         except (json.JSONDecodeError, ValueError):
             logger.warning(
-                "[run_health_agent] Agent returned non-JSON response. "
-                "Check HEALTH_AGENT_INSTRUCTION. Raw text: %s",
-                result.text[:300],
+                "[run_health_agent] Non-JSON response from agent (after fence strip): %s",
+                clean_text[:300],
             )
+            # If Gemini returned a valid AgentResponse wrapped in JSON inside a partial,
+            # try to extract it from the summary field too
+            try:
+                nested = json.loads(response_text)
+                if isinstance(nested, dict) and "summary" in nested:
+                    inner = _strip_code_fences(nested.get("summary", ""))
+                    inner_raw = json.loads(inner)
+                    return AgentResponse(**inner_raw)
+            except (json.JSONDecodeError, ValueError, AttributeError):
+                pass
             return AgentResponse(
                 agent="health_agent",
                 status=AgentStatus.PARTIAL,
-                summary=result.text[:500] if result.text else "Health agent returned no response.",
+                summary=clean_text[:500] if clean_text else "Health agent returned no response.",
                 conflicts=[],
                 actions_taken=["run_health_agent"],
-                data={"raw_response": result.text},
+                data={"raw_response": clean_text},
             )
+
     except Exception as exc:
         logger.error("Health agent error: %s", exc)
         return AgentResponse(

@@ -1,18 +1,15 @@
 """
-Saarthi AI — Health domain database operations.
+tools/health_db.py
+------------------
+AlloyDB (PostgreSQL/asyncpg) read/write helpers for the Health Agent.
 
-All functions are async and use the IAM-authenticated AlloyDB connection.
-These are called by health_agent.py and the Google Fit tools layer.
-
-Tables (prefixed with `health_` to avoid collisions with other agents):
-  - health_sleep_logs    — nightly sleep session records
-  - health_activity_logs — individual workout/activity session records
-  - health_daily_metrics — daily step/calorie/active-minute aggregates
+All writes use INSERT ... ON CONFLICT DO UPDATE (UPSERT) — calling these
+functions repeatedly is safe. Placeholders use Postgres $1, $2, ... syntax.
 """
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from db.alloydb import get_connection
 from models.schemas import SleepSession, ActivitySession, DailyMetrics, HealthSummary
@@ -25,8 +22,7 @@ logger = logging.getLogger(__name__)
 async def save_sleep_sessions(user_id: str, sessions: list[SleepSession]) -> int:
     """
     Persist a list of sleep sessions to health_sleep_logs.
-    Uses ON CONFLICT DO UPDATE so re-fetching is always safe.
-    Returns the number of rows inserted/updated.
+    Returns the number of rows upserted.
     """
     if not sessions:
         return 0
@@ -39,13 +35,13 @@ async def save_sleep_sessions(user_id: str, sessions: list[SleepSession]) -> int
                 """
                 INSERT INTO health_sleep_logs
                     (user_id, date, start_time, end_time, duration_minutes, sleep_stages)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1, $2::DATE, $3::TIMESTAMPTZ, $4::TIMESTAMPTZ, $5, $6::JSONB)
                 ON CONFLICT (user_id, date) DO UPDATE SET
                     start_time       = EXCLUDED.start_time,
                     end_time         = EXCLUDED.end_time,
                     duration_minutes = EXCLUDED.duration_minutes,
                     sleep_stages     = EXCLUDED.sleep_stages,
-                    fetched_at       = now()
+                    synced_at        = NOW()
                 """,
                 user_id,
                 session.date,
@@ -79,7 +75,8 @@ async def save_activity_sessions(user_id: str, sessions: list[ActivitySession]) 
                 INSERT INTO health_activity_logs
                     (user_id, date, activity_type, start_time, end_time,
                      duration_minutes, calories_burned, steps, distance_meters, avg_heart_rate)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                VALUES ($1, $2::DATE, $3, $4::TIMESTAMPTZ, $5::TIMESTAMPTZ,
+                        $6, $7, $8, $9, $10)
                 """,
                 user_id,
                 session.date,
@@ -117,14 +114,14 @@ async def save_daily_metrics(user_id: str, metrics: list[DailyMetrics]) -> int:
                 """
                 INSERT INTO health_daily_metrics
                     (user_id, date, total_steps, total_calories, active_minutes, resting_heart_rate)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1, $2::DATE, $3, $4, $5, $6)
                 ON CONFLICT (user_id, date) DO UPDATE SET
                     total_steps        = EXCLUDED.total_steps,
                     total_calories     = EXCLUDED.total_calories,
                     active_minutes     = EXCLUDED.active_minutes,
                     resting_heart_rate = COALESCE(EXCLUDED.resting_heart_rate,
                                                   health_daily_metrics.resting_heart_rate),
-                    fetched_at         = now()
+                    synced_at          = NOW()
                 """,
                 user_id,
                 m.date,
@@ -143,8 +140,7 @@ async def save_daily_metrics(user_id: str, metrics: list[DailyMetrics]) -> int:
 
 async def update_resting_heart_rate(user_id: str, hr_data: list[dict]) -> None:
     """
-    Upsert resting heart rate values into health_daily_metrics.
-    Called after fetch_heart_rate() to patch in the HR column.
+    Upsert resting_heart_rate into health_daily_metrics from heart rate fetch results.
     """
     if not hr_data:
         return
@@ -155,10 +151,10 @@ async def update_resting_heart_rate(user_id: str, hr_data: list[dict]) -> None:
             await conn.execute(
                 """
                 INSERT INTO health_daily_metrics (user_id, date, resting_heart_rate)
-                VALUES ($1, $2, $3)
+                VALUES ($1, $2::DATE, $3)
                 ON CONFLICT (user_id, date) DO UPDATE SET
                     resting_heart_rate = EXCLUDED.resting_heart_rate,
-                    fetched_at         = now()
+                    synced_at          = NOW()
                 """,
                 user_id,
                 entry["date"],
@@ -179,7 +175,7 @@ async def get_sleep_summary_from_db(user_id: str, days: int = 7) -> list[SleepSe
             SELECT date, start_time, end_time, duration_minutes, sleep_stages
             FROM health_sleep_logs
             WHERE user_id = $1
-              AND date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
             ORDER BY date DESC
             """,
             user_id,
@@ -191,8 +187,8 @@ async def get_sleep_summary_from_db(user_id: str, days: int = 7) -> list[SleepSe
     return [
         SleepSession(
             date=str(row["date"]),
-            start_time=str(row["start_time"]),
-            end_time=str(row["end_time"]),
+            start_time=row["start_time"].isoformat() if row["start_time"] else None,
+            end_time=row["end_time"].isoformat() if row["end_time"] else None,
             duration_minutes=row["duration_minutes"],
             sleep_stages=json.loads(row["sleep_stages"]) if row["sleep_stages"] else None,
         )
@@ -212,7 +208,7 @@ async def get_activity_summary_from_db(
                    calories_burned, steps, distance_meters, avg_heart_rate
             FROM health_activity_logs
             WHERE user_id = $1
-              AND date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
             ORDER BY date DESC
             """,
             user_id,
@@ -225,8 +221,8 @@ async def get_activity_summary_from_db(
         ActivitySession(
             date=str(row["date"]),
             activity_type=row["activity_type"],
-            start_time=str(row["start_time"]),
-            end_time=str(row["end_time"]),
+            start_time=row["start_time"].isoformat() if row["start_time"] else None,
+            end_time=row["end_time"].isoformat() if row["end_time"] else None,
             duration_minutes=row["duration_minutes"],
             calories_burned=row["calories_burned"],
             steps=row["steps"],
@@ -237,10 +233,8 @@ async def get_activity_summary_from_db(
     ]
 
 
-async def get_daily_metrics_from_db(
-    user_id: str, days: int = 7
-) -> list[DailyMetrics]:
-    """Read daily metrics from AlloyDB for the last `days` days."""
+async def get_daily_metrics_from_db(user_id: str, days: int = 7) -> list[DailyMetrics]:
+    """Read daily metrics from DB for the last `days` days."""
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -248,12 +242,13 @@ async def get_daily_metrics_from_db(
             SELECT date, total_steps, total_calories, active_minutes, resting_heart_rate
             FROM health_daily_metrics
             WHERE user_id = $1
-              AND date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
             ORDER BY date DESC
             """,
             user_id,
             days,
         )
+        logger.info(f"Fetched daily metrics for {len(rows)} days for user {user_id}")
     finally:
         await conn.close()
 
@@ -274,22 +269,22 @@ async def build_health_summary(user_id: str, days: int = 7) -> HealthSummary:
     Aggregate all health data from AlloyDB into a single HealthSummary object.
     Computes averages for sleep, steps, and heart rate across the period.
     """
-    sleep_sessions = await get_sleep_summary_from_db(user_id, days)
+    sleep_sessions   = await get_sleep_summary_from_db(user_id, days)
     activity_sessions = await get_activity_summary_from_db(user_id, days)
-    daily_metrics = await get_daily_metrics_from_db(user_id, days)
+    daily_metrics    = await get_daily_metrics_from_db(user_id, days)
 
     avg_sleep = (
         round(sum(s.duration_minutes for s in sleep_sessions) / len(sleep_sessions), 1)
         if sleep_sessions else None
     )
-    steps_list = [m.total_steps for m in daily_metrics if m.total_steps is not None]
-    avg_steps = round(sum(steps_list) / len(steps_list), 0) if steps_list else None
+    steps_list  = [m.total_steps for m in daily_metrics if m.total_steps is not None]
+    avg_steps   = round(sum(steps_list) / len(steps_list), 0) if steps_list else None
 
-    hr_list = [m.resting_heart_rate for m in daily_metrics if m.resting_heart_rate is not None]
-    avg_rhr = round(sum(hr_list) / len(hr_list), 1) if hr_list else None
+    hr_list  = [m.resting_heart_rate for m in daily_metrics if m.resting_heart_rate is not None]
+    avg_rhr  = round(sum(hr_list) / len(hr_list), 1) if hr_list else None
 
     active_mins_list = [m.active_minutes for m in daily_metrics if m.active_minutes is not None]
-    total_active = sum(active_mins_list) if active_mins_list else None
+    total_active     = sum(active_mins_list) if active_mins_list else None
 
     return HealthSummary(
         user_id=user_id,
