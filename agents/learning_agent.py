@@ -28,6 +28,8 @@ import logging
 from datetime import datetime, timedelta
 import uuid
 
+from typing import Any
+
 try:
     from google.adk.agents import Agent
     from google.adk.runners import Runner
@@ -42,7 +44,6 @@ except Exception:  # pragma: no cover
         async def run_async(self, **kwargs):
             raise RuntimeError("google-adk is required to run the live agent")
             yield
-
     class InMemorySessionService:
         async def create_session(self, **kwargs): pass
 
@@ -941,6 +942,10 @@ Always return valid JSON matching the AgentResponse schema:
   "actions_taken": ["list of actions you took"],
   "data": { ...raw structured data for the orchestrator... }
 }
+
+Return ONLY valid JSON.
+Do NOT call functions.
+Do NOT use tool calls.
  
 TONE: Encouraging, specific, data-backed. Mention exact titles, percentages,
 dates, skill names. Never be vague. Celebrate streaks and milestones.
@@ -983,12 +988,52 @@ def _is_goal_orchestration_intent(message: str) -> bool:
     )
 
 
-def _safe_json_loads(payload: str) -> dict:
+def _safe_json_loads(payload: str, fallback: dict | None = None) -> dict:
     try:
         parsed = json.loads(payload)
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
-        return {}
+        if fallback is not None:
+            return fallback
+        return {
+            "agent": "learning_agent",
+            "status": "error",
+            "summary": "Invalid LLM response",
+            "conflicts": [],
+            "actions_taken": [],
+            "data": {"raw": payload},
+        }
+
+
+def _extract_model_parts(result: Any) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Extract plain text and function_call payloads from Gemini-style output parts.
+    """
+    text_chunks: list[str] = []
+    function_calls: list[dict[str, Any]] = []
+
+    candidates = getattr(result, "candidates", None) or []
+    if candidates:
+        content = getattr(candidates[0], "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            part_text = getattr(part, "text", None)
+            if isinstance(part_text, str) and part_text.strip():
+                text_chunks.append(part_text)
+
+            function_call = getattr(part, "function_call", None)
+            if function_call:
+                function_calls.append({
+                    "name": getattr(function_call, "name", ""),
+                    "args": getattr(function_call, "args", {}),
+                })
+
+    if not text_chunks:
+        raw_text = getattr(result, "text", "")
+        if isinstance(raw_text, str) and raw_text.strip():
+            text_chunks.append(raw_text)
+
+    return "\n".join(text_chunks).strip(), function_calls
 
 
 async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
@@ -1006,12 +1051,15 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
     actions_taken: list[str] = []
     conflicts: list[str] = []
 
-    gap = _safe_json_loads(await tool_analyze_skill_gap(user_id, role))
+    gap = _safe_json_loads(await tool_analyze_skill_gap(user_id, role), fallback={})
     actions_taken.append(f"Analyzed skill gap for role: {role}")
     if gap.get("error"):
         conflicts.append(gap["error"])
 
-    recommendations = _safe_json_loads(await tool_recommend_resources(user_id, goal=f"become a {role}"))
+    recommendations = _safe_json_loads(
+        await tool_recommend_resources(user_id, goal=f"become a {role}"),
+        fallback={},
+    )
     actions_taken.append("Built recommendation context")
 
     path_resp = _safe_json_loads(
@@ -1020,7 +1068,8 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
             action="create",
             title=f"Road to {role}",
             target_role=role,
-        )
+        ),
+        fallback={},
     )
     actions_taken.append("Created learning path")
     if path_resp.get("error"):
@@ -1038,7 +1087,8 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
                 resource_title=first_step.get("title", "Learning Session"),
                 date=tomorrow,
                 duration_minutes=60,
-            )
+            ),
+            fallback={},
         )
         actions_taken.append("Scheduled first study session")
         if schedule_resp.get("error"):
@@ -1092,16 +1142,21 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             return await _run_goal_orchestration(message, user_id)
         except Exception as exc:
             logger.error("Goal orchestration failed: %s", exc)
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.ERROR,
+                summary=f"Goal orchestration failed: {exc}",
+                conflicts=[],
+                actions_taken=[],
+                data={"message": message, "user_id": user_id},
+            )
 
-    # ── NEW: correct ADK runner pattern ──────────────────────────────────────
     try:
         runner = Runner(
             agent=learning_agent,
             app_name=APP_NAME,
             session_service=_session_service,
         )
-
-        # Each request gets its own session so history doesn't bleed across calls
         session_id = str(uuid.uuid4())
         await _session_service.create_session(
             app_name=APP_NAME,
@@ -1109,44 +1164,65 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             session_id=session_id,
         )
 
-        # Wrap the message in the format ADK expects
         content = types.Content(
             role="user",
             parts=[types.Part(text=message)],
         )
 
-        # run_async returns an async generator — iterate to find the final response
-        final_text = ""
+        text_chunks: list[str] = []
+        function_calls: list[dict[str, Any]] = []
+
         async for event in runner.run_async(
             user_id=user_id,
             session_id=session_id,
             new_message=content,
         ):
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    final_text = event.content.parts[0].text or ""
-                break
+            if not event.is_final_response():
+                continue
 
-        # Parse the JSON the agent returns
-        try:
-            # Strip markdown code fences if model wraps response in ```json ... ```
-            cleaned = final_text.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r"^```[a-z]*\n?", "", cleaned)
-                cleaned = re.sub(r"\n?```$", "", cleaned)
-                cleaned = cleaned.strip()
-            raw = json.loads(cleaned)
-            return AgentResponse(**raw)
-        except (json.JSONDecodeError, ValueError):
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.PARTIAL,
-                summary=final_text or "Model returned an empty response.",
-                conflicts=[],
-                actions_taken=[],
-                data={"raw_text": final_text},
-            )
+            parts = getattr(getattr(event, "content", None), "parts", None) or []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if isinstance(part_text, str) and part_text.strip():
+                    text_chunks.append(part_text)
 
+                function_call = getattr(part, "function_call", None)
+                if function_call:
+                    function_calls.append({
+                        "name": getattr(function_call, "name", ""),
+                        "args": getattr(function_call, "args", {}),
+                    })
+            break
+
+        text_payload = "\n".join(text_chunks).strip()
+        cleaned = text_payload.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-z]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned)
+            cleaned = cleaned.strip()
+
+        if function_calls:
+            logger.warning("Function call detected in learning agent output: %s", function_calls)
+
+        raw = _safe_json_loads(cleaned)
+        if function_calls:
+            data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+            data["function_calls"] = function_calls
+            raw["data"] = data
+        return AgentResponse(**raw)
+
+    except ValueError:
+        return AgentResponse(
+            agent="learning_agent",
+            status=AgentStatus.PARTIAL,
+            summary="Model response was not valid AgentResponse JSON.",
+            conflicts=[],
+            actions_taken=[],
+            data={
+                "raw_text": text_payload if "text_payload" in locals() else "",
+                "function_calls": function_calls if "function_calls" in locals() else [],
+            },
+        )
     except Exception as exc:
         logger.error("Learning agent error: %s", exc)
         return AgentResponse(
