@@ -1277,11 +1277,20 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             # Extract note content after "note:" or "note that" or just use full message
             note_match = _re.search(r"(?:note:|save.*?note:?|i learned[:\s]+)(.*)", message, _re.IGNORECASE)
             note_content = note_match.group(1).strip() if note_match else message
-            # Guess resource from context
-            resource_title = "Python Crash Course"
-            for keyword in ["python", "gcp", "cloud", "atomic", "habits", "system design"]:
+            # Guess resource from context — match full titles first
+            resource_title = "General"
+            resource_map = {
+                "python crash course": "Python Crash Course",
+                "google cloud": "Google Cloud Certificate",
+                "gcp": "Google Cloud Certificate",
+                "atomic habits": "Atomic Habits",
+                "system design": "System Design Primer",
+                "deep learning": "Deep Learning Specialization",
+                "python": "Python Crash Course",
+            }
+            for keyword, full_title in resource_map.items():
                 if keyword in msg_lower:
-                    resource_title = keyword.title()
+                    resource_title = full_title
                     break
             raw = await tool_log_study_note(
                 user_id=user_id,
