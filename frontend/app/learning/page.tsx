@@ -1,31 +1,39 @@
-"use client"
-import { useEffect, useState } from "react"
 import Header from "@/components/shared/Header"
-import StatusCards from "@/components/learning/StatusCards"
 import ResourceList from "@/components/learning/ResourceList"
+import UpcomingSessions from "@/components/learning/UpcomingSessions"
+import StatusCards from "@/components/learning/StatusCards"
 import SkillGap from "@/components/learning/SkillGap"
 import FlashcardReview from "@/components/learning/FlashcardReview"
 import LearningPath from "@/components/learning/LearningPath"
 import ChatBox from "@/components/learning/ChatBox"
-import { api, type LearningStatus } from "@/lib/api"
+import type { LearningStatus } from "@/lib/api"
 
-export default function LearningPage() {
-  const [status, setStatus] = useState<LearningStatus | null>(null)
-  const [error, setError] = useState("")
+async function getStatus(): Promise<LearningStatus | null> {
+  try {
+    const res = await fetch("http://localhost:8080/learning/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: "00000000-0000-0000-0000-000000000001" }),
+      cache: "no-store",
+    })
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
+}
 
-  useEffect(() => {
-    api.learning.status()
-      .then(setStatus)
-      .catch(() => setError("Could not reach Learning Agent. Is the API running?"))
-  }, [])
+export default async function LearningPage() {
+  const status = await getStatus()
 
   return (
     <>
       <Header title="Learning" subtitle="Your study dashboard · powered by Learning Agent" />
       <div className="p-8 space-y-6">
-        {error && (
+
+        {!status && (
           <div className="bg-red-950 border border-red-800 text-red-400 text-sm rounded-xl px-4 py-3">
-            {error}
+            Could not reach Learning Agent on port 8080. Run ./start.sh first.
           </div>
         )}
 
@@ -33,15 +41,25 @@ export default function LearningPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            {status && (
+
+            {status && status.resources.length > 0 && (
               <div>
-                <h2 className="text-white font-medium mb-3 text-sm">In Progress</h2>
+                <p className="text-gray-400 text-xs uppercase tracking-wide mb-3">In Progress</p>
                 <ResourceList resources={status.resources} />
               </div>
             )}
+
+            {status && status.upcoming_sessions.length > 0 && (
+              <div>
+                <p className="text-gray-400 text-xs uppercase tracking-wide mb-3">Upcoming Sessions</p>
+                <UpcomingSessions sessions={status.upcoming_sessions} />
+              </div>
+            )}
+
             <LearningPath />
             <SkillGap />
           </div>
+
           <div className="space-y-6">
             <FlashcardReview />
             <ChatBox />
