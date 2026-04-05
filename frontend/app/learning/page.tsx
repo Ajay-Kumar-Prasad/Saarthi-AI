@@ -1,3 +1,5 @@
+"use client"
+import { useEffect, useState } from "react"
 import Header from "@/components/shared/Header"
 import ResourceList from "@/components/learning/ResourceList"
 import UpcomingSessions from "@/components/learning/UpcomingSessions"
@@ -6,32 +8,56 @@ import SkillGap from "@/components/learning/SkillGap"
 import FlashcardReview from "@/components/learning/FlashcardReview"
 import LearningPath from "@/components/learning/LearningPath"
 import ChatBox from "@/components/learning/ChatBox"
+import StudyGoals from "@/components/learning/StudyGoals"
+import StudyNotes from "@/components/learning/StudyNotes"
 import type { LearningStatus } from "@/lib/api"
 
-async function getStatus(): Promise<LearningStatus | null> {
-  try {
-    const res = await fetch("http://localhost:8080/learning/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: "00000000-0000-0000-0000-000000000001" }),
-      cache: "no-store",
-    })
-    if (!res.ok) return null
-    return res.json()
-  } catch {
-    return null
-  }
-}
+const USER_ID = "00000000-0000-0000-0000-000000000001"
 
-export default async function LearningPage() {
-  const status = await getStatus()
+export default function LearningPage() {
+  const [status, setStatus] = useState<LearningStatus | null>(null)
+  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch("/api/learning/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: USER_ID }),
+      })
+      if (!res.ok) { setError(true); return }
+      const data = await res.json()
+      setStatus(data)
+      setError(false)
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchStatus()
+    // Refresh every 60s so streak/hours stay live
+    const t = setInterval(fetchStatus, 60_000)
+    return () => clearInterval(t)
+  }, [])
 
   return (
     <>
       <Header title="Learning" subtitle="Your study dashboard · powered by Learning Agent" />
       <div className="p-8 space-y-6">
 
-        {!status && (
+        {loading && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="border border-gray-200 dark:border-gray-800 rounded-xl p-5 animate-pulse bg-gray-100 dark:bg-gray-800 h-24" />
+            ))}
+          </div>
+        )}
+
+        {!loading && error && (
           <div className="bg-red-950 border border-red-800 text-red-400 text-sm rounded-xl px-4 py-3">
             Could not reach Learning Agent on port 8080. Run ./start.sh first.
           </div>
@@ -56,13 +82,16 @@ export default async function LearningPage() {
               </div>
             )}
 
+            <StudyGoals initialGoals={status?.active_goals ?? []} />
+            <StudyNotes resources={status?.resources ?? []} />
             <LearningPath />
             <SkillGap />
+
           </div>
 
           <div className="space-y-6">
             <FlashcardReview />
-            <ChatBox />
+            <ChatBox onAction={fetchStatus} />
           </div>
         </div>
       </div>

@@ -4,41 +4,48 @@ export default function StatusCards({ data }: { data: LearningStatus }) {
   const cards = [
     {
       label: "Study streak",
-      value: `${data.streak_days} day${data.streak_days !== 1 ? "s" : ""}`,
-      sub: data.streak_days > 0 ? "Keep it up!" : "Start today",
-      color: "text-orange-400",
-      bg: "bg-orange-950/30 border-orange-900/50",
+      value: `${data.streak_days}`,
+      unit: data.streak_days === 1 ? "day" : "days",
+      sub: data.streak_days > 0 ? "Keep it going!" : "Start today",
+      color: "text-orange-500 dark:text-orange-400",
+      bg: "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-900/50",
     },
     {
       label: "This week",
-      value: `${data.weekly_hours_studied}h`,
-      sub: "hours studied",
-      color: "text-green-400",
-      bg: "bg-green-950/30 border-green-900/50",
+      value: `${data.weekly_hours_studied}`,
+      unit: "hours",
+      sub: "studied so far",
+      color: "text-green-600 dark:text-green-400",
+      bg: "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-900/50",
     },
     {
       label: "In progress",
       value: `${data.resources.length}`,
-      sub: data.resources.length === 1 ? "resource" : "resources",
-      color: "text-blue-400",
-      bg: "bg-blue-950/30 border-blue-900/50",
+      unit: data.resources.length === 1 ? "resource" : "resources",
+      sub: "actively learning",
+      color: "text-blue-600 dark:text-blue-400",
+      bg: "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900/50",
     },
     {
-      label: "Upcoming sessions",
+      label: "Sessions ahead",
       value: `${data.upcoming_sessions.length}`,
+      unit: "upcoming",
       sub: "next 7 days",
-      color: "text-purple-400",
-      bg: "bg-purple-950/30 border-purple-900/50",
+      color: "text-purple-600 dark:text-purple-400",
+      bg: "bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-900/50",
     },
   ]
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       {cards.map((c) => (
-        <div key={c.label} className={`border rounded-xl p-4 ${c.bg}`}>
-          <p className="text-gray-500 text-xs mb-1">{c.label}</p>
-          <p className={`font-bold text-2xl ${c.color}`}>{c.value}</p>
-          <p className="text-gray-600 text-xs mt-0.5">{c.sub}</p>
+        <div key={c.label} className={`border rounded-xl p-5 ${c.bg}`}>
+          <p className="text-gray-500 dark:text-gray-500 text-xs mb-2 font-medium uppercase tracking-wide">{c.label}</p>
+          <div className="flex items-baseline gap-1.5">
+            <span className={`font-bold text-3xl ${c.color}`}>{c.value}</span>
+            <span className="text-gray-500 dark:text-gray-500 text-sm">{c.unit}</span>
+          </div>
+          <p className="text-gray-400 dark:text-gray-600 text-xs mt-1">{c.sub}</p>
         </div>
       ))}
     </div>

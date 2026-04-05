@@ -1274,24 +1274,29 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
         # SAVE NOTE
         if any(k in msg_lower for k in ["save this note", "take a note", "i learned", "note:", "save note"]):
             import re as _re
-            # Extract note content after "note:" or "note that" or just use full message
-            note_match = _re.search(r"(?:note:|save.*?note:?|i learned[:\s]+)(.*)", message, _re.IGNORECASE)
-            note_content = note_match.group(1).strip() if note_match else message
-            # Guess resource from context — match full titles first
-            resource_title = "General"
-            resource_map = {
-                "python crash course": "Python Crash Course",
-                "google cloud": "Google Cloud Certificate",
-                "gcp": "Google Cloud Certificate",
-                "atomic habits": "Atomic Habits",
-                "system design": "System Design Primer",
-                "deep learning": "Deep Learning Specialization",
-                "python": "Python Crash Course",
-            }
-            for keyword, full_title in resource_map.items():
-                if keyword in msg_lower:
-                    resource_title = full_title
-                    break
+            # Match frontend format: "Save this note for <Resource>: <content>"
+            for_match = _re.search(r"save.*?note.*?for\s+(.+?):\s+(.+)", message, _re.IGNORECASE | _re.DOTALL)
+            if for_match:
+                resource_title = for_match.group(1).strip()
+                note_content = for_match.group(2).strip()
+            else:
+                # Fallback: guess resource from keyword map
+                note_match = _re.search(r"(?:note:|save.*?note:?|i learned[:\s]+)(.*)", message, _re.IGNORECASE)
+                note_content = note_match.group(1).strip() if note_match else message
+                resource_title = "General"
+                resource_map = {
+                    "python crash course": "Python Crash Course",
+                    "google cloud": "Google Cloud Certificate",
+                    "gcp": "Google Cloud Certificate",
+                    "atomic habits": "Atomic Habits",
+                    "system design": "System Design Primer",
+                    "deep learning": "Deep Learning Specialization",
+                    "python": "Python Crash Course",
+                }
+                for keyword, full_title in resource_map.items():
+                    if keyword in msg_lower:
+                        resource_title = full_title
+                        break
             raw = await tool_log_study_note(
                 user_id=user_id,
                 resource_title=resource_title,
@@ -1309,7 +1314,10 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             )
 
         # GET NOTES
-        if any(k in msg_lower for k in ["show my notes", "get notes", "my notes", "what did i write", "show notes"]):
+        if any(k in msg_lower for k in [
+            "show my notes", "get notes", "my notes", "what did i write",
+            "show notes", "tool_get_notes", "study notes", "notes for",  # ← add these
+        ]):
             import re as _re
             resource_match = _re.search(r"(?:notes? on|notes? about|notes? for)\s+([A-Za-z][^,\.]+)", message, _re.IGNORECASE)
             resource_title = resource_match.group(1).strip() if resource_match else ""
