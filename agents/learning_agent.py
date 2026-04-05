@@ -25,6 +25,7 @@ Returns:
 import re
 import json
 import logging
+import asyncio
 from datetime import datetime, timedelta
 import uuid
 
@@ -305,58 +306,200 @@ async def tool_schedule_study_session(
     if datetime.fromisoformat(date).date() < datetime.utcnow().date():
         return _json_error("Cannot schedule sessions in the past.")
 
-    cal_event = None
+    async def _rollback_calendar_event(event_id: str) -> tuple[bool, str]:
+        if not event_id:
+            logger.error("Rollback skipped: missing event_id")
+            return False, "missing_event_id"
+        logger.warning(
+            "Attempting calendar rollback for user_id=%s event_id=%s",
+            user_id, event_id,
+        )
+        try:
+            rollback_resp = await delete_calendar_event(user_id, event_id)
+            if not isinstance(rollback_resp, dict):
+                logger.error(
+                    "Calendar rollback returned non-dict response user_id=%s event_id=%s type=%s",
+                    user_id, event_id, type(rollback_resp).__name__,
+                )
+                return False, "invalid_rollback_response"
+            if rollback_resp.get("deleted"):
+                logger.info(
+                    "Calendar rollback succeeded for user_id=%s event_id=%s",
+                    user_id, event_id,
+                )
+                return True, ""
+            err = rollback_resp.get("error", "unknown_rollback_error")
+            logger.error(
+                "Calendar rollback failed for user_id=%s event_id=%s error=%s",
+                user_id, event_id, err,
+            )
+            return False, str(err)
+        except Exception as rollback_exc:
+            logger.exception(
+                "Calendar rollback exception for user_id=%s event_id=%s",
+                user_id, event_id,
+            )
+            return False, str(rollback_exc)
+
+    cal_event: dict | None = None
+    event_id = ""
     try:
         # 1. Find a free slot on that date
         free_slot = await find_free_slot(user_id, date, duration_minutes)
         if not free_slot:
             return json.dumps({
+                "status": "partial",
+                "session_id": None,
+                "event_id": None,
+                "error": None,
                 "conflict": True,
+                "conflict_detail": f"No free {duration_minutes}-minute slot found on {date}. "
+                                   "Try a different date or reduce session length.",
                 "message": f"No free {duration_minutes}-minute slot found on {date}. "
                            "Try a different date or reduce session length.",
             })
 
-        # 2. Create the Google Calendar event via MCP
-        cal_event = await create_study_calendar_event(
-            user_id=user_id,
-            title=f"Study: {resource_title}",
-            start_time=free_slot["start"],
-            duration_minutes=duration_minutes,
-            description=f"Saarthi study block for '{resource_title}'",
-        )
+        # 2. Create the Google Calendar event via MCP (retry once)
+        last_calendar_error = ""
+        for attempt in (1, 2):
+            try:
+                cal_event = await asyncio.wait_for(
+                    create_study_calendar_event(
+                        user_id=user_id,
+                        title=f"Study: {resource_title}",
+                        start_time=free_slot["start"],
+                        duration_minutes=duration_minutes,
+                        description=f"Saarthi study block for '{resource_title}'",
+                    ),
+                    timeout=12,
+                )
+            except Exception as cal_exc:
+                cal_event = {"event_id": None, "error": str(cal_exc)}
 
-        # 3. Save session to AlloyDB
+            event_id = (cal_event or {}).get("event_id") or ""
+            if event_id:
+                logger.info(
+                    "Calendar create succeeded (attempt=%s) user_id=%s event_id=%s",
+                    attempt, user_id, event_id,
+                )
+                break
+
+            last_calendar_error = (cal_event or {}).get("error") or "calendar_create_failed"
+            logger.error(
+                "Calendar create failed (attempt=%s) user_id=%s error=%s",
+                attempt, user_id, last_calendar_error,
+            )
+            if attempt == 1:
+                logger.info("Retrying calendar create once for user_id=%s", user_id)
+        else:
+            pass
+
+        if not event_id:
+            return _json_error(
+                "Calendar event creation failed; session was not saved.",
+                status="error",
+                session_id=None,
+                event_id=None,
+                conflict=None,
+                calendar_error=last_calendar_error,
+            )
+
+        # 3. Save session to AlloyDB (no blind retry)
         session = StudySession(
             user_id=user_id,
             resource_id=resource_id,
             title=f"Study: {resource_title}",
             scheduled_at=free_slot["start"],
             duration_minutes=duration_minutes,
-            calendar_event_id=cal_event.get("event_id"),
+            calendar_event_id=event_id,
         )
         saved_session = await create_study_session(session)
         if not saved_session:
-            if cal_event and cal_event.get("event_id"):
-                try:
-                    await delete_calendar_event(user_id, cal_event["event_id"])
-                except Exception:
-                    logger.warning("Calendar rollback failed for event_id=%s", cal_event["event_id"])
-            return _json_error("Unable to save study session. Resource may be invalid for this user.")
+            logger.error(
+                "DB session create failed after calendar success user_id=%s event_id=%s",
+                user_id, event_id,
+            )
+            rolled_back, rollback_error = await _rollback_calendar_event(event_id)
+            if rolled_back:
+                return _json_error(
+                    "DB failed, calendar rolled back",
+                    status="error",
+                    session_id=None,
+                    event_id=event_id,
+                    conflict=None,
+                )
+            return json.dumps({
+                "status": "partial",
+                "session_id": None,
+                "event_id": event_id,
+                "error": "DB failed after calendar creation; rollback failed.",
+                "conflict": "Calendar event exists but DB failed",
+                "rollback_error": rollback_error or None,
+            }, default=str)
+
+        if saved_session.get("_idempotency") == "existing":
+            logger.info(
+                "DB idempotency conflict resolved user_id=%s resource_id=%s scheduled_at=%s existing_session_id=%s",
+                user_id, resource_id, free_slot["start"], saved_session.get("id"),
+            )
+            # We created a fresh calendar event in this request, but DB returned an
+            # existing session from a concurrent writer. Roll back new event to avoid orphan.
+            rolled_back, rollback_error = await _rollback_calendar_event(event_id)
+            if not rolled_back:
+                return json.dumps({
+                    "status": "partial",
+                    "session_id": saved_session.get("id"),
+                    "event_id": saved_session.get("calendar_event_id"),
+                    "session": saved_session,
+                    "error": "Session already existed, but calendar cleanup failed for duplicate event.",
+                    "conflict": "Duplicate calendar event may exist for idempotent request",
+                    "rollback_error": rollback_error or None,
+                }, default=str)
+            return json.dumps({
+                "status": "ok",
+                "session_id": saved_session.get("id"),
+                "event_id": saved_session.get("calendar_event_id"),
+                "session": saved_session,
+                "error": None,
+                "conflict": None,
+                "message": "Session already exists, returning existing",
+            }, default=str)
+
+        logger.info(
+            "DB session create succeeded user_id=%s session_id=%s event_id=%s",
+            user_id, saved_session.get("id"), event_id,
+        )
 
         return json.dumps({
-            "conflict": False,
+            "status": "ok",
+            "session_id": saved_session.get("id"),
+            "event_id": event_id,
             "session": saved_session,
             "calendar_event": cal_event,
+            "error": None,
+            "conflict": None,
             "message": f"Study session scheduled on {date} at {free_slot['start'].strftime('%I:%M %p')}.",
         }, default=str)
     except Exception as exc:
-        logger.error("tool_schedule_study_session failed: %s", exc)
-        if cal_event and cal_event.get("event_id"):
-            try:
-                await delete_calendar_event(user_id, cal_event["event_id"])
-            except Exception:
-                logger.warning("Calendar rollback failed for event_id=%s", cal_event["event_id"])
-        return _json_error("Failed to schedule study session.")
+        logger.exception("tool_schedule_study_session failed user_id=%s", user_id)
+        if event_id:
+            rolled_back, rollback_error = await _rollback_calendar_event(event_id)
+            if not rolled_back:
+                return json.dumps({
+                    "status": "partial",
+                    "session_id": None,
+                    "event_id": event_id,
+                    "error": f"Failed to schedule study session: {exc}",
+                    "conflict": "Calendar event exists but DB failed",
+                    "rollback_error": rollback_error or None,
+                }, default=str)
+        return _json_error(
+            "Failed to schedule study session.",
+            status="error",
+            session_id=None,
+            event_id=event_id or None,
+            conflict=None,
+        )
 
 
 async def tool_log_study_note(
@@ -785,6 +928,39 @@ async def tool_create_learning_path(
     if not user_id:
         return _json_error("user_id is required.")
 
+    def _tokenize(text: str) -> set[str]:
+        parts = re.findall(r"[a-z0-9]+", (text or "").lower())
+        return {p for p in parts if len(p) >= 2}
+
+    def _resource_score_for_skill(res: dict, skill: str) -> int:
+        skill_tokens = _tokenize(skill)
+        title_tokens = _tokenize(str(res.get("title", "")))
+        tag_tokens: set[str] = set()
+        tags = res.get("tags") or []
+        if isinstance(tags, list):
+            for t in tags:
+                tag_tokens.update(_tokenize(str(t)))
+        haystack = title_tokens | tag_tokens
+
+        overlap = len(skill_tokens & haystack)
+        score = overlap * 10
+        skill_lower = skill.lower()
+        title_lower = str(res.get("title", "")).lower()
+        if skill_lower in title_lower:
+            score += 15
+        if any(skill_lower in str(t).lower() for t in tags):
+            score += 20
+
+        # Prefer resources that are not completed for actionable roadmap steps.
+        status = str(res.get("status", ""))
+        status_bonus = {
+            "not_started": 3,
+            "in_progress": 2,
+            "paused": 1,
+            "completed": 0,
+        }.get(status, 0)
+        return score + status_bonus
+
     if action == "create":
         # Step 1 — compute skill gap if role provided
         gap_data = None
@@ -798,7 +974,85 @@ async def tool_create_learning_path(
  
         # Step 3 — create the path container
         path_title = title or f"Learning Path: {target_role or 'My Roadmap'}"
-        estimated_weeks = len(resources) * 2 if resources else 8
+        required_missing = gap_data.get("missing_required", []) if gap_data else []
+        recommended_missing = gap_data.get("missing_recommended", []) if gap_data else []
+
+        # Build a deterministic, skill-driven plan:
+        #   - required skills first
+        #   - recommended skills second
+        used_resource_ids: set[str] = set()
+        step_plan: list[dict[str, Any]] = []
+        ordered_skills = [("required", s) for s in required_missing] + [("recommended", s) for s in recommended_missing]
+
+        for priority, skill in ordered_skills:
+            scored: list[tuple[int, dict[str, Any]]] = []
+            for res in resources:
+                if res.get("id") in used_resource_ids:
+                    continue
+                score = _resource_score_for_skill(res, skill)
+                if score > 0:
+                    scored.append((score, res))
+
+            scored.sort(key=lambda x: (-x[0], str(x[1].get("title", "")).lower()))
+            top_matches = [r for _, r in scored[:2]]
+            if top_matches:
+                used_resource_ids.add(top_matches[0].get("id"))
+                step_plan.append({
+                    "skill": skill,
+                    "priority": priority,
+                    "resources": [
+                        {
+                            "id": r.get("id"),
+                            "title": r.get("title"),
+                            "resource_type": r.get("resource_type"),
+                            "status": r.get("status"),
+                        }
+                        for r in top_matches
+                    ],
+                    "reason": (
+                        f"Targets missing {priority} skill '{skill}'. "
+                        f"Highest-signal match from your existing resources."
+                    ),
+                    "missing_resource": False,
+                })
+            else:
+                # Mark explicitly rather than creating an empty hidden gap.
+                step_plan.append({
+                    "skill": skill,
+                    "priority": priority,
+                    "resources": [],
+                    "reason": (
+                        f"'{skill}' is a missing {priority} skill, but no matching resource "
+                        "was found in your library."
+                    ),
+                    "missing_resource": True,
+                })
+
+        # Fallback when no gap/role context exists: deterministic resource sequence
+        if not step_plan:
+            fallback_resources = sorted(
+                resources,
+                key=lambda r: (
+                    {"not_started": 0, "in_progress": 1, "paused": 2, "completed": 3}.get(str(r.get("status", "")), 9),
+                    str(r.get("title", "")).lower(),
+                ),
+            )
+            for res in fallback_resources:
+                step_plan.append({
+                    "skill": "General progression",
+                    "priority": "recommended",
+                    "resources": [{
+                        "id": res.get("id"),
+                        "title": res.get("title"),
+                        "resource_type": res.get("resource_type"),
+                        "status": res.get("status"),
+                    }],
+                    "reason": "No explicit skill gap provided; using your current learning resources in a structured order.",
+                    "missing_resource": False,
+                })
+
+        actionable_steps = [s for s in step_plan if s.get("resources")]
+        estimated_weeks = max(4, len(actionable_steps) * 2) if step_plan else 8
  
         path = await create_learning_path(
             user_id=user_id,
@@ -808,35 +1062,42 @@ async def tool_create_learning_path(
             estimated_weeks=estimated_weeks,
         )
  
-        # Step 4 — add each resource as a step
+        # Step 4 — persist one DB step per actionable skill step
         steps_created = []
-        for i, res in enumerate(resources, start=1):
+        step_order_counter = 1
+        for plan_step in step_plan:
+            if not plan_step.get("resources"):
+                continue
+            primary = plan_step["resources"][0]
             step = await add_path_step(
                 path_id=path["id"],
-                resource_id=res["id"],
-                step_order=i,
-                title=res["title"],
-                why_this=(
-                    f"Covers skills needed for {target_role}."
-                    if target_role else
-                    "Part of your structured learning sequence."
-                ),
-                estimated_hours=10 if res["resource_type"] == "course" else 4,
+                resource_id=primary["id"],
+                step_order=step_order_counter,
+                title=f"{plan_step['skill']}: {primary['title']}",
+                why_this=plan_step["reason"],
+                estimated_hours=10 if primary.get("resource_type") == "course" else 4,
             )
             steps_created.append(step)
+            step_order_counter += 1
  
+        summary = (
+            f"Built a skill-driven roadmap for {target_role}: "
+            f"{len(required_missing)} required and {len(recommended_missing)} recommended gaps analyzed; "
+            f"{len(steps_created)} actionable steps created."
+            if target_role else
+            f"Built a structured roadmap with {len(steps_created)} actionable steps from your learning resources."
+        )
+
         return json.dumps({
             "action": "created",
             "path": path,
-            "steps": steps_created,
+            "steps": step_plan,
+            "db_steps": steps_created,
             "total_steps": len(steps_created),
             "estimated_weeks": estimated_weeks,
             "skill_gap_addressed": gap_data,
-            "message": (
-                f"Learning path '{path_title}' created with "
-                f"{len(steps_created)} steps. "
-                f"Estimated completion: {estimated_weeks} weeks."
-            ),
+            "summary": summary,
+            "message": summary,
         }, default=str)
  
     elif action == "view":
@@ -1005,6 +1266,160 @@ def _safe_json_loads(payload: str, fallback: dict | None = None) -> dict:
         }
 
 
+def _parse_tool_output(tool_output: Any) -> tuple[dict[str, Any], list[str]]:
+    partial_reasons: list[str] = []
+
+    if isinstance(tool_output, dict):
+        return dict(tool_output), partial_reasons
+
+    if isinstance(tool_output, str):
+        try:
+            parsed = json.loads(tool_output)
+            if isinstance(parsed, dict):
+                return parsed, partial_reasons
+            partial_reasons.append("Tool output was JSON but not an object.")
+            return {"raw_output": parsed}, partial_reasons
+        except Exception:
+            partial_reasons.append("Tool output was not valid JSON.")
+            return {"raw_output": tool_output}, partial_reasons
+
+    partial_reasons.append("Tool output type was unexpected.")
+    return {"raw_output": str(tool_output)}, partial_reasons
+
+
+def normalize_agent_response(
+    tool_output: dict,
+    agent_name: str,
+    action: str,
+) -> AgentResponse:
+    parsed, partial_reasons = _parse_tool_output(tool_output)
+
+    expected_keys_by_action: dict[str, list[str]] = {
+        "tool_get_learning_status": [
+            "resources", "upcoming_sessions", "active_goals",
+            "weekly_hours_studied", "streak_days",
+        ],
+        "tool_schedule_flashcard_review": ["action"],
+        "tool_analyze_skill_gap": ["role", "readiness_pct", "missing_required"],
+        "tool_create_learning_path": ["action"],
+        "tool_add_learning_resource": ["created"],
+        "tool_log_study_note": ["saved"],
+        "tool_get_notes": ["notes", "count"],
+        "goal_orchestration": ["role", "skill_gap", "recommendations", "learning_path"],
+    }
+
+    raw_status = parsed.get("status")
+    explicit_status: AgentStatus | None = None
+    if isinstance(raw_status, str):
+        lowered = raw_status.strip().lower()
+        if lowered in {AgentStatus.OK.value, AgentStatus.ERROR.value, AgentStatus.PARTIAL.value}:
+            explicit_status = AgentStatus(lowered)
+
+    error_msg = parsed.get("error")
+    conflicts: list[str] = []
+    actions_taken: list[str] = [action]
+    parsed_actions = parsed.get("actions_taken")
+    if isinstance(parsed_actions, list):
+        for a in parsed_actions:
+            a_str = str(a).strip()
+            if a_str and a_str not in actions_taken:
+                actions_taken.append(a_str)
+    expected_keys = expected_keys_by_action.get(action, [])
+    missing_keys = [k for k in expected_keys if k not in parsed]
+    if missing_keys:
+        partial_reasons.append(f"Missing expected fields: {', '.join(missing_keys)}")
+
+    if parsed.get("_fallback"):
+        partial_reasons.append("Fallback handling was used.")
+
+    conflict_value = parsed.get("conflict")
+    if conflict_value is True:
+        partial_reasons.append(parsed.get("message") or "Conflict detected in tool output.")
+    elif isinstance(conflict_value, str) and conflict_value.strip():
+        conflicts.append(conflict_value.strip())
+    elif isinstance(conflict_value, list):
+        conflicts.extend(str(c).strip() for c in conflict_value if str(c).strip())
+
+    for flag in ("saved", "created", "completed", "deleted"):
+        if flag in parsed and parsed.get(flag) is False:
+            partial_reasons.append(f"{flag} flag indicates incomplete execution.")
+
+    calendar_event = parsed.get("calendar_event")
+    if isinstance(calendar_event, dict) and not calendar_event.get("event_id"):
+        partial_reasons.append("Calendar event details are incomplete.")
+
+    declared_conflicts = parsed.get("conflicts")
+    if isinstance(declared_conflicts, list):
+        conflicts.extend(str(c) for c in declared_conflicts if str(c).strip())
+    elif isinstance(declared_conflicts, str) and declared_conflicts.strip():
+        conflicts.append(declared_conflicts.strip())
+
+    conflict_detail = parsed.get("conflict_detail")
+    if isinstance(conflict_detail, str) and conflict_detail.strip():
+        conflicts.append(conflict_detail.strip())
+
+    issues = parsed.get("issues")
+    if isinstance(issues, list):
+        partial_reasons.extend(str(i) for i in issues if str(i).strip())
+
+    has_error = isinstance(error_msg, str) and error_msg.strip() != ""
+    if has_error:
+        conflicts.append(error_msg.strip())
+
+    has_partial_signals = bool(partial_reasons)
+    has_conflicts = bool([c for c in conflicts if str(c).strip()])
+
+    # Status resolution (strict order):
+    # 1) explicit valid status
+    # 2) error
+    # 3) partial signals/conflicts
+    # 4) default ok
+    if explicit_status is not None:
+        status = explicit_status
+    elif has_error:
+        status = AgentStatus.ERROR
+    elif has_partial_signals or has_conflicts:
+        status = AgentStatus.PARTIAL
+    else:
+        status = AgentStatus.OK
+
+    # Safety floors:
+    # - Never OK when error exists
+    # - Never OK when conflicts exist
+    # - Never OK when fallback/parse/incomplete signals exist
+    if has_error and status == AgentStatus.OK:
+        status = AgentStatus.ERROR
+    if (has_conflicts or has_partial_signals) and status == AgentStatus.OK:
+        status = AgentStatus.PARTIAL
+
+    if has_partial_signals:
+        conflicts.extend(partial_reasons)
+
+    if status == AgentStatus.ERROR:
+        summary = parsed.get("summary") or parsed.get("message") or (
+            f"{action} failed: {error_msg.strip()}" if has_error else f"{action} failed."
+        )
+    elif status == AgentStatus.PARTIAL:
+        summary = parsed.get("summary") or parsed.get("message") or f"{action} completed partially."
+    else:
+        summary = parsed.get("summary") or parsed.get("message") or f"{action} completed successfully."
+
+    # Deduplicate conflicts while preserving order
+    deduped_conflicts: list[str] = []
+    for c in conflicts:
+        if c and c not in deduped_conflicts:
+            deduped_conflicts.append(c)
+
+    return AgentResponse(
+        agent=agent_name,
+        status=status,
+        summary=summary,
+        conflicts=deduped_conflicts,
+        actions_taken=actions_taken,
+        data=parsed,
+    )
+
+
 def _extract_model_parts(result: Any) -> tuple[str, list[dict[str, Any]]]:
     """
     Extract plain text and function_call payloads from Gemini-style output parts.
@@ -1036,31 +1451,163 @@ def _extract_model_parts(result: Any) -> tuple[str, list[dict[str, Any]]]:
     return "\n".join(text_chunks).strip(), function_calls
 
 
+def _structured_intent(message: str) -> str | None:
+    msg = message.strip()
+
+    if _is_goal_orchestration_intent(msg):
+        return "goal_orchestration"
+
+    if re.match(r"^save.*?note.*?for\s+.+?:\s+.+", msg, re.IGNORECASE | re.DOTALL):
+        return "save_note"
+
+    if re.match(r"^(show|get)\s+(my\s+)?notes(\s+(for|on|about)\s+.+)?$", msg, re.IGNORECASE):
+        return "get_notes"
+
+    if re.match(
+        r"^update learning path step:\s*path_id=[^,\s]+,\s*step_id=\d+,\s*status=[a-z_]+$",
+        msg,
+        re.IGNORECASE,
+    ):
+        return "update_path_step"
+
+    if re.match(
+        r"^create a flashcard:\s*question=\".*?\",\s*answer=\".*?\",\s*resource_id=[^,\s]+$",
+        msg,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        return "create_flashcard"
+
+    return None
+
+
+def route_learning_request(message: str) -> str:
+    """
+    Route requests between deterministic flows and ADK runner.
+    Returns: "deterministic" | "adk"
+    """
+    return "deterministic" if _structured_intent(message) else "adk"
+
+
+async def _run_deterministic_request(message: str, user_id: str, intent: str) -> AgentResponse:
+    msg_lower = message.lower()
+
+    if intent == "goal_orchestration":
+        return await _run_goal_orchestration(message, user_id)
+
+    if intent == "create_flashcard":
+        m = re.search(
+            r"create a flashcard:\s*question=\"(.*?)\",\s*answer=\"(.*?)\",\s*resource_id=([^\s,]+)",
+            message,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not m:
+            return normalize_agent_response(
+                {"error": "Invalid flashcard command format."},
+                "learning_agent",
+                "tool_schedule_flashcard_review",
+            )
+        question, answer, resource_id = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        raw = await tool_schedule_flashcard_review(
+            user_id=user_id,
+            action="create",
+            resource_id=resource_id,
+            question=question,
+            answer=answer,
+        )
+        data = _safe_json_loads(raw, fallback={"_fallback": True, "raw_output": raw})
+        if data.get("action") == "created":
+            data["message"] = "Flashcard created successfully."
+        return normalize_agent_response(data, "learning_agent", "tool_schedule_flashcard_review")
+
+    if intent == "save_note":
+        for_match = re.search(r"save.*?note.*?for\s+(.+?):\s+(.+)", message, re.IGNORECASE | re.DOTALL)
+        if not for_match:
+            return normalize_agent_response(
+                {"error": "Invalid note command format."},
+                "learning_agent",
+                "tool_log_study_note",
+            )
+        resource_title = for_match.group(1).strip()
+        note_content = for_match.group(2).strip()
+        raw = await tool_log_study_note(
+            user_id=user_id,
+            resource_title=resource_title,
+            note_content=note_content,
+        )
+        data = _safe_json_loads(raw, fallback={"_fallback": True, "raw_output": raw})
+        if data.get("saved"):
+            data["message"] = f"Note saved for '{resource_title}'."
+        else:
+            data["message"] = f"Failed to save note: {data.get('error', 'unknown error')}"
+        return normalize_agent_response(data, "learning_agent", "tool_log_study_note")
+
+    if intent == "get_notes":
+        resource_match = re.search(r"(?:notes? on|notes? about|notes? for)\s+([A-Za-z][^,\.]+)", message, re.IGNORECASE)
+        resource_title = resource_match.group(1).strip() if resource_match else ""
+        raw = await tool_get_notes(user_id=user_id, resource_title=resource_title)
+        data = _safe_json_loads(raw, fallback={"_fallback": True, "raw_output": raw})
+        count = data.get("count", 0)
+        data["message"] = f"Found {count} note(s)" + (f" for '{resource_title}'." if resource_title else ".")
+        return normalize_agent_response(data, "learning_agent", "tool_get_notes")
+
+    if intent == "update_path_step":
+        m = re.search(
+            r"path_id=([^,\s]+),\s*step_id=(\d+),\s*status=([a-z_]+)",
+            message,
+            re.IGNORECASE,
+        )
+        if not m:
+            return normalize_agent_response(
+                {"error": "Invalid path step update format."},
+                "learning_agent",
+                "tool_create_learning_path",
+            )
+        path_id, step_order, step_status = m.group(1).strip(), int(m.group(2)), m.group(3).strip().lower()
+        raw = await tool_create_learning_path(
+            user_id=user_id,
+            action="update_step",
+            path_id=path_id,
+            step_order=step_order,
+            step_status=step_status,
+        )
+        data = _safe_json_loads(raw, fallback={"_fallback": True, "raw_output": raw})
+        return normalize_agent_response(data, "learning_agent", "tool_create_learning_path")
+
+    return normalize_agent_response(
+        {"error": f"Unsupported deterministic intent: {intent}"},
+        "learning_agent",
+        "deterministic_dispatch",
+    )
+
+
 async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
     role = _detect_role_from_text(message)
     if not role:
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.PARTIAL,
-            summary="Could not detect a target role from your message.",
-            conflicts=[],
-            actions_taken=[],
-            data={"message": message},
+        return normalize_agent_response(
+            {
+                "message": "Could not detect a target role from your message.",
+                "_fallback": True,
+                "input_message": message,
+            },
+            "learning_agent",
+            "goal_orchestration",
         )
 
     actions_taken: list[str] = []
-    conflicts: list[str] = []
+    issues: list[str] = []
 
-    gap = _safe_json_loads(await tool_analyze_skill_gap(user_id, role), fallback={})
+    gap = _safe_json_loads(await tool_analyze_skill_gap(user_id, role), fallback={"_fallback": True})
     actions_taken.append(f"Analyzed skill gap for role: {role}")
     if gap.get("error"):
-        conflicts.append(gap["error"])
+        issues.append(str(gap["error"]))
 
     recommendations = _safe_json_loads(
         await tool_recommend_resources(user_id, goal=f"become a {role}"),
-        fallback={},
+        fallback={"_fallback": True},
     )
     actions_taken.append("Built recommendation context")
+    if recommendations.get("error"):
+        issues.append(str(recommendations["error"]))
 
     path_resp = _safe_json_loads(
         await tool_create_learning_path(
@@ -1069,11 +1616,11 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
             title=f"Road to {role}",
             target_role=role,
         ),
-        fallback={},
+        fallback={"_fallback": True},
     )
     actions_taken.append("Created learning path")
     if path_resp.get("error"):
-        conflicts.append(path_resp["error"])
+        issues.append(str(path_resp["error"]))
 
     schedule_resp = {}
     steps = path_resp.get("steps") or []
@@ -1088,33 +1635,33 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
                 date=tomorrow,
                 duration_minutes=60,
             ),
-            fallback={},
+            fallback={"_fallback": True},
         )
         actions_taken.append("Scheduled first study session")
         if schedule_resp.get("error"):
-            conflicts.append(schedule_resp["error"])
+            issues.append(str(schedule_resp["error"]))
         if schedule_resp.get("conflict"):
-            conflicts.append(schedule_resp.get("message", "Unable to schedule first study session"))
+            issues.append(schedule_resp.get("message", "Unable to schedule first study session"))
 
-    status = AgentStatus.OK if not conflicts else AgentStatus.PARTIAL
-    return AgentResponse(
-        agent="learning_agent",
-        status=status,
-        summary=(
-            f"Prepared a learning plan toward {role}: analyzed gaps, generated recommendations, created a roadmap, and scheduled the first session."
-            if status == AgentStatus.OK
-            else f"Prepared a partial learning plan toward {role}; some steps need attention."
-        ),
-        conflicts=conflicts,
-        actions_taken=actions_taken,
-        data={
+    response = normalize_agent_response(
+        {
             "role": role,
             "skill_gap": gap,
             "recommendations": recommendations,
             "learning_path": path_resp,
             "first_session": schedule_resp,
+            "issues": issues,
+            "message": (
+                f"Prepared a learning plan toward {role}: analyzed gaps, generated recommendations, created a roadmap, and scheduled the first session."
+                if not issues else
+                f"Prepared a partial learning plan toward {role}; some steps need attention."
+            ),
         },
+        "learning_agent",
+        "goal_orchestration",
     )
+    response.actions_taken = actions_taken
+    return response
 
 
 # Module-level session service — shared across all calls
@@ -1128,237 +1675,35 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
     In production the orchestrator calls this agent via sub_agents=[learning_agent].
     """
     if not user_id:
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.ERROR,
-            summary="Missing required user_id.",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
+        return normalize_agent_response(
+            {"error": "Missing required user_id."},
+            "learning_agent",
+            "run_learning_agent",
         )
 
-    if _is_goal_orchestration_intent(message):
+    route = route_learning_request(message)
+    logger.info("Learning agent routing decision route=%s user_id=%s", route, user_id)
+
+    if route == "deterministic":
+        intent = _structured_intent(message) or "unknown"
+        logger.info("Learning agent executing deterministic flow intent=%s user_id=%s", intent, user_id)
         try:
-            return await _run_goal_orchestration(message, user_id)
+            return await _run_deterministic_request(message, user_id, intent)
         except Exception as exc:
-            logger.exception("Goal orchestration failed")
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.ERROR,
-                summary=f"Goal orchestration failed: {exc}",
-                conflicts=[],
-                actions_taken=[],
-                data={"message": message, "user_id": user_id},
+            logger.exception("Deterministic flow failed intent=%s user_id=%s", intent, user_id)
+            return normalize_agent_response(
+                {
+                    "error": f"Deterministic flow failed: {exc}",
+                    "summary": f"Deterministic flow failed for intent '{intent}'.",
+                    "intent": intent,
+                    "message": message,
+                    "user_id": user_id,
+                },
+                "learning_agent",
+                "deterministic_dispatch",
             )
 
-    # --- Direct tool dispatch (bypass ADK runner for reliability) ---
-    msg_lower = message.lower()
-    try:
-        # STATUS / WHAT AM I STUDYING
-        if any(k in msg_lower for k in ["studying", "what am i", "status", "streak", "weekly hours"]):
-            raw = await tool_get_learning_status(user_id)
-            data = _safe_json_loads(raw, fallback={})
-            resources = data.get("resources", [])
-            goals = data.get("active_goals", [])
-            hours = data.get("weekly_hours_studied", 0)
-            streak = data.get("streak_days", 0)
-            titles = ", ".join(r["title"] for r in resources) if resources else "none"
-            summary = (
-                f"You are currently studying: {titles}. "
-                f"{len(goals)} active goal(s), {hours}h studied this week, {streak}-day streak."
-                if resources
-                else "No active learning resources found. Add something to get started!"
-            )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_get_learning_status"],
-                data=data,
-            )
-
-        # FLASHCARDS
-        if any(k in msg_lower for k in ["flashcard", "review card", "due card", "spaced repetition"]):
-            raw = await tool_schedule_flashcard_review(user_id=user_id, action="due")
-            data = _safe_json_loads(raw, fallback={})
-            due = data.get("due_count", 0)
-            summary = f"You have {due} flashcard(s) due for review." if due else "No flashcards due right now!"
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_schedule_flashcard_review"],
-                data=data,
-            )
-
-        # SKILL GAP
-        if any(k in msg_lower for k in ["skill", "missing", "gap", "ready", "become"]):
-            role = _detect_role_from_text(msg_lower) or "Data Engineer"
-            raw = await tool_analyze_skill_gap(user_id=user_id, role_name=role)
-            data = _safe_json_loads(raw, fallback={})
-            readiness = data.get("readiness_pct", 0)
-            missing = data.get("missing_required", [])
-            summary = (
-                f"You are {readiness}% ready for {role}. "
-                f"Missing required skills: {', '.join(missing) if missing else 'none'}."
-            )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_analyze_skill_gap"],
-                data=data,
-            )
-
-        # LEARNING PATH
-        if any(k in msg_lower for k in ["learning path", "roadmap", "my path", "show path"]):
-            raw = await tool_create_learning_path(user_id=user_id, action="view")
-            data = _safe_json_loads(raw, fallback={})
-            paths = data.get("paths", [])
-            summary = (
-                f"You have {len(paths)} learning path(s)."
-                if paths else
-                "No learning paths found. Say 'Create a roadmap to become a Data Engineer' to start one."
-            )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_create_learning_path"],
-                data=data,
-            )
-
-        # ADD RESOURCE — extract title from message
-        if any(k in msg_lower for k in ["add ", "reading list", "started reading", "i want to read", "add course", "add book"]):
-            import re as _re
-            # Try to extract title from message
-            title_match = _re.search(r"(?:add|read|start)\s+([A-Za-z][^,]+?)(?:\s+by\s+|\s+to\s+|$)", message, _re.IGNORECASE)
-            title = title_match.group(1).strip() if title_match else message[:50]
-            author_match = _re.search(r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)", message)
-            author = author_match.group(1) if author_match else ""
-            rtype = "course" if "course" in msg_lower else "book"
-            raw = await tool_add_learning_resource(
-                user_id=user_id, title=title, resource_type=rtype, author=author
-            )
-            data = _safe_json_loads(raw, fallback={})
-            if data.get("created"):
-                summary = f"Added '{title}' to your learning list."
-            else:
-                summary = f"Could not add resource: {data.get('error', 'unknown error')}"
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK if data.get("created") else AgentStatus.ERROR,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_add_learning_resource"],
-                data=data,
-            )
-
-        # PROGRESS UPDATE
-        if any(k in msg_lower for k in ["progress", "finished chapter", "page", "completed %", "i'm at"]):
-            raw = await tool_get_learning_status(user_id)
-            data = _safe_json_loads(raw, fallback={})
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary="Here is your current learning progress.",
-                conflicts=[],
-                actions_taken=["tool_get_learning_status"],
-                data=data,
-            )
-
-        # SAVE NOTE
-        if any(k in msg_lower for k in ["save this note", "take a note", "i learned", "note:", "save note"]):
-            import re as _re
-            # Match frontend format: "Save this note for <Resource>: <content>"
-            for_match = _re.search(r"save.*?note.*?for\s+(.+?):\s+(.+)", message, _re.IGNORECASE | _re.DOTALL)
-            if for_match:
-                resource_title = for_match.group(1).strip()
-                note_content = for_match.group(2).strip()
-            else:
-                # Fallback: guess resource from keyword map
-                note_match = _re.search(r"(?:note:|save.*?note:?|i learned[:\s]+)(.*)", message, _re.IGNORECASE)
-                note_content = note_match.group(1).strip() if note_match else message
-                resource_title = "General"
-                resource_map = {
-                    "python crash course": "Python Crash Course",
-                    "google cloud": "Google Cloud Certificate",
-                    "gcp": "Google Cloud Certificate",
-                    "atomic habits": "Atomic Habits",
-                    "system design": "System Design Primer",
-                    "deep learning": "Deep Learning Specialization",
-                    "python": "Python Crash Course",
-                }
-                for keyword, full_title in resource_map.items():
-                    if keyword in msg_lower:
-                        resource_title = full_title
-                        break
-            raw = await tool_log_study_note(
-                user_id=user_id,
-                resource_title=resource_title,
-                note_content=note_content,
-            )
-            data = _safe_json_loads(raw, fallback={})
-            saved = data.get("saved", False)
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK if saved else AgentStatus.ERROR,
-                summary=f"Note saved for '{resource_title}'." if saved else f"Failed to save note: {data.get('error', '')}",
-                conflicts=[],
-                actions_taken=["tool_log_study_note"],
-                data=data,
-            )
-
-        # GET NOTES
-        if any(k in msg_lower for k in [
-            "show my notes", "get notes", "my notes", "what did i write",
-            "show notes", "tool_get_notes", "study notes", "notes for",  # ← add these
-        ]):
-            import re as _re
-            resource_match = _re.search(r"(?:notes? on|notes? about|notes? for)\s+([A-Za-z][^,\.]+)", message, _re.IGNORECASE)
-            resource_title = resource_match.group(1).strip() if resource_match else ""
-            raw = await tool_get_notes(user_id=user_id, resource_title=resource_title)
-            data = _safe_json_loads(raw, fallback={})
-            count = data.get("count", 0)
-            summary = f"Found {count} note(s)" + (f" for '{resource_title}'." if resource_title else ".")
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
-                actions_taken=["tool_get_notes"],
-                data=data,
-            )
-
-        # DEFAULT — status
-        raw = await tool_get_learning_status(user_id)
-        data = _safe_json_loads(raw, fallback={})
-        resources = data.get("resources", [])
-        titles = ", ".join(r["title"] for r in resources) if resources else "none"
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.OK,
-            summary=f"Currently studying: {titles}.",
-            conflicts=[],
-            actions_taken=["tool_get_learning_status"],
-            data=data,
-        )
-
-    except Exception as exc:
-        logger.error("Direct dispatch failed: %s", exc)
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.ERROR,
-            summary=f"Agent error: {exc}",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
-        )
-
+    logger.info("Learning agent executing ADK runner path user_id=%s", user_id)
     try:
         runner = Runner(
             agent=learning_agent,
@@ -1417,27 +1762,23 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
             data["function_calls"] = function_calls
             raw["data"] = data
-        return AgentResponse(**raw)
+        return normalize_agent_response(raw, "learning_agent", "llm_runner")
 
     except ValueError:
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.PARTIAL,
-            summary="Model response was not valid AgentResponse JSON.",
-            conflicts=[],
-            actions_taken=[],
-            data={
+        return normalize_agent_response(
+            {
+                "message": "Model response was not valid AgentResponse JSON.",
+                "_fallback": True,
                 "raw_text": text_payload if "text_payload" in locals() else "",
                 "function_calls": function_calls if "function_calls" in locals() else [],
             },
+            "learning_agent",
+            "llm_runner",
         )
     except Exception as exc:
         logger.error("Learning agent error: %s", exc)
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.ERROR,
-            summary=f"Learning agent encountered an error: {exc}",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
+        return normalize_agent_response(
+            {"error": f"Learning agent encountered an error: {exc}"},
+            "learning_agent",
+            "llm_runner",
         )

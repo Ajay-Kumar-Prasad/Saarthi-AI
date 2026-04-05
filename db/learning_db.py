@@ -6,6 +6,7 @@ These are called by learning_tools.py and the learning agent directly.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -171,6 +172,8 @@ async def create_study_session(session: StudySession) -> dict:
                 (id, user_id, resource_id, title, scheduled_at,
                  duration_minutes, calendar_event_id, completed, notes)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (user_id, resource_id, scheduled_at)
+            DO NOTHING
             RETURNING *
             """,
             str(uuid4()),
@@ -183,7 +186,61 @@ async def create_study_session(session: StudySession) -> dict:
             session.completed,
             session.notes,
         )
-        return dict(row)
+        if row:
+            created = dict(row)
+            created["_idempotency"] = "created"
+            return created
+
+        existing = await conn.fetchrow(
+            """
+            SELECT *
+            FROM study_sessions
+            WHERE user_id = $1
+              AND resource_id = $2
+              AND scheduled_at = $3
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            session.user_id,
+            session.resource_id,
+            session.scheduled_at,
+        )
+        if not existing:
+            return {}
+
+        existing_row = dict(existing)
+        existing_row["_idempotency"] = "existing"
+        return existing_row
+    finally:
+        await conn.close()
+
+
+async def find_existing_study_session(
+    user_id: str,
+    resource_id: str,
+    scheduled_at: datetime,
+) -> dict:
+    """
+    Return an existing study session with the same user/resource/time if present.
+    Used by the agent for idempotency protection.
+    """
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT *
+            FROM study_sessions
+            WHERE user_id = $1
+              AND resource_id = $2
+              AND scheduled_at = $3
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            user_id,
+            resource_id,
+            scheduled_at,
+        )
+        return dict(row) if row else {}
     finally:
         await conn.close()
 
@@ -312,9 +369,46 @@ async def get_study_streak(user_id: str) -> int:
 
 async def query_learning_history_safe(user_id: str, question: str) -> dict:
     """
-    Safely run AlloyDB NL-to-SQL for the learning domain.
-    Allows only single SELECT statements and blocks suspicious SQL.
+    Safely run AlloyDB NL-to-SQL for the learning domain with strict tenant
+    isolation and defensive SQL validation.
     """
+    allowed_tables = {
+        "learning_resources",
+        "study_sessions",
+        "study_goals",
+        "flashcards",
+        "learning_paths",
+        "learning_path_steps",
+    }
+    timeout_seconds = 5.0
+
+    def _extract_tables(sql: str) -> set[str]:
+        refs = re.findall(r"\b(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_\.\"`]*)", sql, flags=re.IGNORECASE)
+        tables: set[str] = set()
+        for ref in refs:
+            cleaned = ref.strip().strip('"').strip("`")
+            base = cleaned.split(".")[-1].strip('"').strip("`").lower()
+            if base:
+                tables.add(base)
+        return tables
+
+    def _apply_tenant_filter(sql: str) -> str:
+        sql = sql.strip()
+        has_where = re.search(r"\bwhere\b", sql, flags=re.IGNORECASE) is not None
+        if has_where:
+            return f"SELECT * FROM ({sql}) AS sub WHERE sub.user_id = $1"
+
+        # Inject WHERE before trailing ORDER/GROUP/LIMIT/OFFSET/FETCH if present.
+        trailing = re.search(
+            r"\b(order\s+by|group\s+by|limit|offset|fetch)\b",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        if trailing:
+            idx = trailing.start()
+            return f"{sql[:idx]} WHERE user_id = $1 {sql[idx:]}"
+        return f"{sql} WHERE user_id = $1"
+
     conn = await get_connection()
     try:
         scoped_question = f"For user_id={user_id} in learning domain only: {question}"
@@ -330,64 +424,71 @@ async def query_learning_history_safe(user_id: str, question: str) -> dict:
                 generated_sql = (row[0] or "").strip()
             except (KeyError, TypeError):
                 generated_sql = (row.get("google_ml.nl_to_sql") or "").strip()
-        lower = generated_sql.lower()
-
         if not generated_sql:
             return {
-                "question": question,
-                "generated_sql": None,
-                "results": [],
+                "status": "error",
+                "data": [],
                 "error": "No SQL generated from query.",
             }
 
-        if not lower.startswith("select") or ";" in generated_sql:
+        lower = generated_sql.lower().strip()
+        if not lower.startswith("select"):
             return {
-                "question": question,
-                "generated_sql": generated_sql,
-                "results": [],
-                "error": "Unsafe SQL blocked. Only single SELECT statements are allowed.",
+                "status": "error",
+                "data": [],
+                "error": "Unsafe SQL blocked. Only SELECT queries are allowed.",
             }
 
-        blocked_keywords = (
-            "insert ",
-            "update ",
-            "delete ",
-            "drop ",
-            "alter ",
-            "create ",
-            "grant ",
-            "revoke ",
-        )
-        if any(k in lower for k in blocked_keywords):
+        if ";" in generated_sql or "--" in generated_sql or "/*" in generated_sql or "*/" in generated_sql:
             return {
-                "question": question,
-                "generated_sql": generated_sql,
-                "results": [],
-                "error": "Unsafe SQL blocked.",
+                "status": "error",
+                "data": [],
+                "error": "Unsafe SQL blocked. Multiple statements/comments are not allowed.",
             }
 
-        if "user_id" not in lower:
+        if re.search(r"\b(insert|update|delete|drop|alter)\b", lower, flags=re.IGNORECASE):
             return {
-                "question": question,
-                "generated_sql": generated_sql,
-                "results": [],
-                "error": "Query was not user-scoped; blocked for safety.",
+                "status": "error",
+                "data": [],
+                "error": "Unsafe SQL blocked. Dangerous keywords detected.",
             }
 
-        rows = await conn.fetch(generated_sql)
+        tables = _extract_tables(generated_sql)
+        if not tables:
+            return {
+                "status": "error",
+                "data": [],
+                "error": "Unsafe SQL blocked. Could not determine referenced table(s).",
+            }
+
+        disallowed = sorted(t for t in tables if t not in allowed_tables)
+        if disallowed:
+            return {
+                "status": "error",
+                "data": [],
+                "error": f"Unsafe SQL blocked. Disallowed table(s): {', '.join(disallowed)}",
+            }
+
+        tenant_scoped_sql = _apply_tenant_filter(generated_sql)
+        final_sql = f"SELECT * FROM ({tenant_scoped_sql}) AS tenant_scoped LIMIT 100"
+
+        rows = await conn.fetch(final_sql, user_id, timeout=timeout_seconds)
         return {
+            "status": "ok",
+            "data": [dict(r) for r in rows],
+            # Backward-compatible metadata for existing callers/logging.
             "question": question,
             "generated_sql": generated_sql,
+            "executed_sql": final_sql,
             "results": [dict(r) for r in rows],
             "row_count": len(rows),
         }
     except Exception as exc:
         logger.error("Safe NL query failed: %s", exc)
         return {
-            "question": question,
-            "generated_sql": None,
-            "results": [],
-            "error": str(exc),
+            "status": "error",
+            "data": [],
+            "error": f"Query execution failed safely: {exc}",
         }
     finally:
         await conn.close()

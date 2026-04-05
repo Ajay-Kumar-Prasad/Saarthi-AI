@@ -26,17 +26,23 @@ async def save_learning_note(
     resource_title: str,
     note_content: str,
     tags: list[str] | None = None,
+    resource_id: str | None = None,
 ) -> dict:
+    if not user_id:
+        return {"note_id": None, "saved": False, "error": "user_id is required"}
     if MOCK_MCP:
-        logger.info("[MOCK] Saving note for resource: %s", resource_title)
+        logger.info("[MOCK] Saving note user_id=%s resource=%s", user_id, resource_title)
         return {"note_id": "mock-note-001", "saved": True, "resource": resource_title}
     from tools.notes_mcp import save_learning_note as _save
-    return await _save(user_id, resource_title, note_content, tags)
+    return await _save(user_id, resource_title, note_content, tags, resource_id=resource_id)
 
 
 async def get_learning_notes(user_id: str, resource_title: str | None = None) -> list[dict]:
+    if not user_id:
+        logger.warning("Notes read rejected user_id=<missing>")
+        return []
     if MOCK_MCP:
-        logger.info("[MOCK] Fetching learning notes")
+        logger.info("[MOCK] Fetching learning notes user_id=%s", user_id)
         return [
             {
                 "note_id": "mock-note-001",
@@ -80,6 +86,27 @@ def _get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
+def _resolve_calendar_scope(user_id: str) -> tuple[str, bool]:
+    """
+    Resolve calendar ID with optional per-user mapping.
+    Returns (calendar_id, is_dedicated_to_user).
+    """
+    import json
+
+    raw_map = os.getenv("SAARTHI_USER_CALENDAR_MAP", "").strip()
+    if raw_map:
+        try:
+            parsed = json.loads(raw_map)
+            if isinstance(parsed, dict):
+                cid = parsed.get(user_id)
+                if isinstance(cid, str) and cid.strip():
+                    return cid.strip(), True
+        except Exception as exc:
+            logger.warning("Invalid SAARTHI_USER_CALENDAR_MAP; falling back to shared calendar: %s", exc)
+
+    return os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com"), False
+
+
 async def create_study_calendar_event(
     user_id: str,
     title: str,
@@ -87,8 +114,10 @@ async def create_study_calendar_event(
     duration_minutes: int = 60,
     description: str = "",
 ) -> dict:
+    if not user_id:
+        return {"event_id": None, "error": "user_id is required"}
     if MOCK_MCP:
-        logger.info("[MOCK] Creating calendar event: %s at %s", title, start_time)
+        logger.info("[MOCK] Creating calendar event user_id=%s title=%s at=%s", user_id, title, start_time)
         return {
             "event_id": "mock-cal-event-001",
             "html_link": "https://calendar.google.com/mock",
@@ -97,7 +126,7 @@ async def create_study_calendar_event(
         }
 
     try:
-        calendar_id = os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com")
+        calendar_id, dedicated = _resolve_calendar_scope(user_id)
         service = _get_calendar_service()
         end_time = start_time + timedelta(minutes=duration_minutes)
 
@@ -106,6 +135,12 @@ async def create_study_calendar_event(
             "description": description or f"Saarthi AI study block — {title}",
             "start": {"dateTime": start_time.isoformat(), "timeZone": "Asia/Kolkata"},
             "end": {"dateTime": end_time.isoformat(), "timeZone": "Asia/Kolkata"},
+            "extendedProperties": {
+                "private": {
+                    "user_id": user_id,
+                    "agent": "learning",
+                }
+            },
             "colorId": "7",
             "reminders": {
                 "useDefault": False,
@@ -113,7 +148,10 @@ async def create_study_calendar_event(
             },
         }
         created = service.events().insert(calendarId=calendar_id, body=event).execute()
-        logger.info("Calendar event created: %s", created.get("id"))
+        logger.info(
+            "Calendar write success user_id=%s event_id=%s calendar_id=%s dedicated=%s access=create",
+            user_id, created.get("id"), calendar_id, dedicated,
+        )
         return {
             "event_id": created["id"],
             "html_link": created.get("htmlLink", ""),
@@ -121,13 +159,16 @@ async def create_study_calendar_event(
             "end": created["end"]["dateTime"],
         }
     except Exception as exc:
-        logger.error("Failed to create calendar event: %s", exc)
+        logger.error("Calendar write failure user_id=%s access=create error=%s", user_id, exc)
         return {"event_id": None, "error": str(exc)}
 
 
 async def get_calendar_events(user_id: str, date: str) -> list[dict]:
+    if not user_id:
+        logger.warning("Calendar read rejected user_id=<missing>")
+        return []
     if MOCK_MCP:
-        logger.info("[MOCK] Fetching calendar events for %s", date)
+        logger.info("[MOCK] Fetching calendar events user_id=%s date=%s", user_id, date)
         return [
             {"event_id": "mock-evt-001", "summary": "Team standup",
              "start": f"{date}T08:30:00+05:30", "end": f"{date}T09:00:00+05:30"},
@@ -136,7 +177,7 @@ async def get_calendar_events(user_id: str, date: str) -> list[dict]:
         ]
 
     try:
-        calendar_id = os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com")
+        calendar_id, dedicated = _resolve_calendar_scope(user_id)
         service = _get_calendar_service()
         day_start = f"{date}T00:00:00+05:30"
         day_end = f"{date}T23:59:59+05:30"
@@ -147,10 +188,20 @@ async def get_calendar_events(user_id: str, date: str) -> list[dict]:
             timeMax=day_end,
             singleEvents=True,
             orderBy="startTime",
+            privateExtendedProperty=f"user_id={user_id}",
         ).execute()
 
         events = []
         for evt in result.get("items", []):
+            private_meta = (evt.get("extendedProperties", {}) or {}).get("private", {}) or {}
+            owner = private_meta.get("user_id")
+            if not dedicated and owner != user_id:
+                logger.warning(
+                    "Calendar read rejected user_id=%s event_id=%s reason=owner_mismatch owner=%s",
+                    user_id, evt.get("id"), owner,
+                )
+                continue
+
             start = evt.get("start", {})
             end = evt.get("end", {})
             events.append({
@@ -159,28 +210,47 @@ async def get_calendar_events(user_id: str, date: str) -> list[dict]:
                 "start": start.get("dateTime", start.get("date", "")),
                 "end": end.get("dateTime", end.get("date", "")),
             })
-        logger.info("Found %d events on %s", len(events), date)
+        logger.info(
+            "Calendar read success user_id=%s date=%s count=%d calendar_id=%s dedicated=%s",
+            user_id, date, len(events), calendar_id, dedicated,
+        )
         return events
     except Exception as exc:
-        logger.error("Failed to fetch calendar events: %s", exc)
+        logger.error("Calendar read failure user_id=%s date=%s error=%s", user_id, date, exc)
         return []
 
 
 async def delete_calendar_event(user_id: str, event_id: str) -> dict:
+    if not user_id:
+        return {"deleted": False, "error": "user_id is required"}
     if MOCK_MCP:
-        logger.info("[MOCK] Deleting calendar event: %s", event_id)
+        logger.info("[MOCK] Deleting calendar event user_id=%s event_id=%s", user_id, event_id)
         return {"deleted": True, "event_id": event_id}
 
     if not event_id:
         return {"deleted": False, "error": "event_id is required"}
 
     try:
-        calendar_id = os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com")
+        calendar_id, dedicated = _resolve_calendar_scope(user_id)
         service = _get_calendar_service()
+        event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        private_meta = (event.get("extendedProperties", {}) or {}).get("private", {}) or {}
+        owner = private_meta.get("user_id")
+        if not dedicated and owner != user_id:
+            logger.warning(
+                "Calendar delete rejected user_id=%s event_id=%s owner=%s",
+                user_id, event_id, owner,
+            )
+            return {"deleted": False, "error": "event does not belong to user"}
+
         service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        logger.info(
+            "Calendar delete success user_id=%s event_id=%s calendar_id=%s dedicated=%s",
+            user_id, event_id, calendar_id, dedicated,
+        )
         return {"deleted": True, "event_id": event_id}
     except Exception as exc:
-        logger.error("Failed to delete calendar event: %s", exc)
+        logger.error("Calendar delete failure user_id=%s event_id=%s error=%s", user_id, event_id, exc)
         return {"deleted": False, "error": str(exc)}
 
 

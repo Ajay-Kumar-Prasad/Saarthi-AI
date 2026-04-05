@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agents.learning_agent import run_learning_agent, learning_agent
+from agents.learning_agent import run_learning_agent, learning_agent, normalize_agent_response
 from db.schemas import AgentResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -93,16 +93,15 @@ async def learning_chat(req: ChatRequest):
     return response
 
 
-@app.post("/learning/status")
+@app.post("/learning/status", response_model=AgentResponse)
 async def get_status(req: StatusRequest):
     """
     Quick status endpoint — returns the learning snapshot without an
     LLM call. Useful for the Streamlit dashboard sidebar.
     """
     from agents.learning_agent import tool_get_learning_status
-    import json
     raw = await tool_get_learning_status(req.user_id)
-    return json.loads(raw)
+    return normalize_agent_response(raw, "learning_agent", "tool_get_learning_status")
 
 
 @app.post("/learning/add-resource")

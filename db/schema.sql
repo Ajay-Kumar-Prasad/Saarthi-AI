@@ -92,6 +92,19 @@ CREATE TABLE IF NOT EXISTS study_sessions (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'unique_user_resource_time'
+    ) THEN
+        ALTER TABLE study_sessions
+        ADD CONSTRAINT unique_user_resource_time
+        UNIQUE (user_id, resource_id, scheduled_at);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS study_sessions_user_date_idx
     ON study_sessions(user_id, scheduled_at);
 
