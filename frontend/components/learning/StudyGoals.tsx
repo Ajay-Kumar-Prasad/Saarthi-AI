@@ -1,10 +1,10 @@
 "use client"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import type { Goal } from "@/lib/api"
 
 const USER_ID = "00000000-0000-0000-0000-000000000001"
 
-async function createGoal(data: {
+async function createGoalOnBackend(data: {
   title: string
   weekly_hours_target: number
   target_date?: string
@@ -19,6 +19,17 @@ async function createGoal(data: {
   })
   if (!res.ok) throw new Error("Failed to create goal")
   return res.json()
+}
+
+async function fetchGoals(): Promise<Goal[]> {
+  const res = await fetch("/api/learning/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: USER_ID }),
+  })
+  if (!res.ok) return []
+  const data = await res.json()
+  return Array.isArray(data?.active_goals) ? data.active_goals : []
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -58,7 +69,9 @@ function GoalCard({ goal }: { goal: Goal }) {
       </div>
 
       <p className="text-gray-400 text-xs mt-2">
-        Target: <span className="text-gray-600 dark:text-gray-300 font-medium">{goal.weekly_hours_target}h / week</span>
+        Target: <span className="text-gray-600 dark:text-gray-300 font-medium">
+          {Number(goal.weekly_hours_target)}h / week
+        </span>
       </p>
     </div>
   )
@@ -74,6 +87,11 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  // Sync when parent re-fetches status
+  useEffect(() => {
+    setGoals(initialGoals)
+  }, [initialGoals])
+
   async function handleCreate() {
     if (!title.trim() || !hours) return
     const hoursNum = parseFloat(hours)
@@ -87,27 +105,34 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
     setSuccess(null)
 
     try {
-      const res = await createGoal({
+      const res = await createGoalOnBackend({
         title: title.trim(),
         weekly_hours_target: hoursNum,
         target_date: targetDate || undefined,
       })
 
-      // Optimistically add goal while backend processes
-      const optimistic: Goal = {
-        id: crypto.randomUUID(),
-        title: title.trim(),
-        weekly_hours_target: hoursNum,
-        progress_pct: 0,
-        target_date: targetDate || null,
-        status: "active",
-      }
-      setGoals((prev) => [optimistic, ...prev])
       setSuccess(res?.summary ?? "Goal created!")
       setTitle("")
       setHours("")
       setTargetDate("")
       setShowForm(false)
+
+      const fresh = await fetchGoals()
+      if (fresh.length > 0) {
+        setGoals(fresh)
+      } else {
+        const optimistic: Goal = {
+          id: crypto.randomUUID(),
+          title: title.trim(),
+          weekly_hours_target: hoursNum,
+          progress_pct: 0,
+          target_date: targetDate || null,
+          status: "active",
+        }
+        setGoals((prev) => [optimistic, ...prev])
+      }
+
+      setTimeout(() => setSuccess(null), 3000)
     } catch {
       setError("Failed to create goal. Is the backend running?")
     } finally {
@@ -130,11 +155,9 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
         </button>
       </div>
 
-      {/* Create form */}
       {showForm && (
         <div className="bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4 mb-4 space-y-3">
           <p className="text-gray-900 dark:text-white text-sm font-semibold">New Study Goal</p>
-
           <div>
             <label className="text-gray-500 text-xs mb-1 block">Goal title *</label>
             <input
@@ -144,7 +167,6 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
               className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500 transition-colors"
             />
           </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-gray-500 text-xs mb-1 block">Weekly hours target *</label>
@@ -168,10 +190,8 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
               />
             </div>
           </div>
-
           {error && <p className="text-red-400 text-xs">{error}</p>}
           {success && <p className="text-green-400 text-xs">{success}</p>}
-
           <button
             onClick={handleCreate}
             disabled={loading || !title.trim() || !hours}
@@ -182,14 +202,16 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
         </div>
       )}
 
-      {/* Active goals */}
+      {success && !showForm && (
+        <p className="text-green-400 text-xs mb-3">{success}</p>
+      )}
+
       {active.length > 0 && (
         <div className="space-y-3 mb-4">
           {active.map((g) => <GoalCard key={g.id} goal={g} />)}
         </div>
       )}
 
-      {/* Completed goals */}
       {completed.length > 0 && (
         <div>
           <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 mt-4">Completed</p>
@@ -199,7 +221,6 @@ export default function StudyGoals({ initialGoals }: { initialGoals: Goal[] }) {
         </div>
       )}
 
-      {/* Empty state */}
       {goals.length === 0 && !showForm && (
         <div className="bg-white dark:bg-gray-900 border border-dashed border-gray-200 dark:border-gray-700 rounded-xl p-6 text-center">
           <p className="text-gray-400 text-sm">No study goals yet.</p>
