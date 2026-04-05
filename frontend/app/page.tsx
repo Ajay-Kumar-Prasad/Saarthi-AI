@@ -4,7 +4,7 @@ import Link from "next/link"
 const agents = [
   { name: "Learning", href: "/learning", icon: "📚", desc: "Books, courses, flashcards, skill gaps", owner: "Ajay Kumar", live: true },
   { name: "Work", href: "/work", icon: "💼", desc: "Tasks, calendar, deadlines", owner: "Hariharan S", live: false },
-  { name: "Health", href: "/health", icon: "❤️", desc: "Sleep, fitness, nutrition", owner: "Joshna Ch", live: false },
+  { name: "Health", href: "/health", icon: "❤️", desc: "Sleep, fitness, nutrition", owner: "Joshna Ch", live: true },
   { name: "Finance", href: "/finance", icon: "💰", desc: "Budget, bills, spending", owner: "Shubham Negi", live: false },
   { name: "Social", href: "/social", icon: "👥", desc: "Events, birthdays, relationships", owner: "Team", live: false },
 ]
@@ -17,8 +17,11 @@ export default function Dashboard() {
         <p className="text-gray-400 text-sm mb-6">Five agents. One memory. Zero context-switching.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((a) => (
-            <div key={a.name} className={`bg-gray-900 border rounded-xl p-5 transition-all
-              ${a.live ? "border-gray-700 hover:border-indigo-500 cursor-pointer" : "border-gray-800 opacity-50"}`}>
+            <div
+              key={a.name}
+              className={`bg-gray-900 border rounded-xl p-5 transition-all
+                ${a.live ? "border-gray-700 hover:border-indigo-500 cursor-pointer" : "border-gray-800 opacity-50"}`}
+            >
               {a.live ? (
                 <Link href={a.href} className="block">
                   <div className="flex items-center justify-between mb-3">
