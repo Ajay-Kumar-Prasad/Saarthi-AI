@@ -208,3 +208,10 @@ __marimo__/
 
 alloydb-auth-proxy
 alloydb-proxy
+
+token.json
+client_secret.json
+.env
+start.sh
+get_token.py
+*.json.bak

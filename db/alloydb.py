@@ -30,19 +30,15 @@ async def _get_connector() -> AsyncConnector:
 
 
 async def get_connection() -> asyncpg.Connection:
-    """
-    Returns an IAM-authenticated AlloyDB connection.
-    Call this inside an async context; close the connection when done.
-    """
-    connector = await _get_connector()
-    conn = await connector.connect(
-        instance_uri=os.environ["ALLOYDB_INSTANCE_URI"],
-        driver="asyncpg",
-        db=os.environ.get("ALLOYDB_DB", "saarthi"),
-        enable_iam_auth=True,
-        user=os.environ["ALLOYDB_IAM_USER"],
+    """Standard connection using Public IP with SSL not required"""
+    return await asyncpg.connect(
+        host=os.environ["DB_HOST"],
+        port=os.environ["DB_PORT"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASS"],
+        database=os.environ["DB_NAME"],
+        ssl=False  # <--- THIS IS THE FIX
     )
-    return conn
 
 
 async def query_nl(natural_language_query: str, user_id: str) -> dict:

@@ -1141,7 +1141,7 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
         try:
             return await _run_goal_orchestration(message, user_id)
         except Exception as exc:
-            logger.error("Goal orchestration failed: %s", exc)
+            logger.exception("Goal orchestration failed")
             return AgentResponse(
                 agent="learning_agent",
                 status=AgentStatus.ERROR,
@@ -1150,6 +1150,197 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 actions_taken=[],
                 data={"message": message, "user_id": user_id},
             )
+
+    # --- Direct tool dispatch (bypass ADK runner for reliability) ---
+    msg_lower = message.lower()
+    try:
+        # STATUS / WHAT AM I STUDYING
+        if any(k in msg_lower for k in ["studying", "what am i", "status", "streak", "weekly hours"]):
+            raw = await tool_get_learning_status(user_id)
+            data = _safe_json_loads(raw, fallback={})
+            resources = data.get("resources", [])
+            goals = data.get("active_goals", [])
+            hours = data.get("weekly_hours_studied", 0)
+            streak = data.get("streak_days", 0)
+            titles = ", ".join(r["title"] for r in resources) if resources else "none"
+            summary = (
+                f"You are currently studying: {titles}. "
+                f"{len(goals)} active goal(s), {hours}h studied this week, {streak}-day streak."
+                if resources
+                else "No active learning resources found. Add something to get started!"
+            )
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_get_learning_status"],
+                data=data,
+            )
+
+        # FLASHCARDS
+        if any(k in msg_lower for k in ["flashcard", "review card", "due card", "spaced repetition"]):
+            raw = await tool_schedule_flashcard_review(user_id=user_id, action="due")
+            data = _safe_json_loads(raw, fallback={})
+            due = data.get("due_count", 0)
+            summary = f"You have {due} flashcard(s) due for review." if due else "No flashcards due right now!"
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_schedule_flashcard_review"],
+                data=data,
+            )
+
+        # SKILL GAP
+        if any(k in msg_lower for k in ["skill", "missing", "gap", "ready", "become"]):
+            role = _detect_role_from_text(msg_lower) or "Data Engineer"
+            raw = await tool_analyze_skill_gap(user_id=user_id, role_name=role)
+            data = _safe_json_loads(raw, fallback={})
+            readiness = data.get("readiness_pct", 0)
+            missing = data.get("missing_required", [])
+            summary = (
+                f"You are {readiness}% ready for {role}. "
+                f"Missing required skills: {', '.join(missing) if missing else 'none'}."
+            )
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_analyze_skill_gap"],
+                data=data,
+            )
+
+        # LEARNING PATH
+        if any(k in msg_lower for k in ["learning path", "roadmap", "my path", "show path"]):
+            raw = await tool_create_learning_path(user_id=user_id, action="view")
+            data = _safe_json_loads(raw, fallback={})
+            paths = data.get("paths", [])
+            summary = (
+                f"You have {len(paths)} learning path(s)."
+                if paths else
+                "No learning paths found. Say 'Create a roadmap to become a Data Engineer' to start one."
+            )
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_create_learning_path"],
+                data=data,
+            )
+
+        # ADD RESOURCE — extract title from message
+        if any(k in msg_lower for k in ["add ", "reading list", "started reading", "i want to read", "add course", "add book"]):
+            import re as _re
+            # Try to extract title from message
+            title_match = _re.search(r"(?:add|read|start)\s+([A-Za-z][^,]+?)(?:\s+by\s+|\s+to\s+|$)", message, _re.IGNORECASE)
+            title = title_match.group(1).strip() if title_match else message[:50]
+            author_match = _re.search(r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)", message)
+            author = author_match.group(1) if author_match else ""
+            rtype = "course" if "course" in msg_lower else "book"
+            raw = await tool_add_learning_resource(
+                user_id=user_id, title=title, resource_type=rtype, author=author
+            )
+            data = _safe_json_loads(raw, fallback={})
+            if data.get("created"):
+                summary = f"Added '{title}' to your learning list."
+            else:
+                summary = f"Could not add resource: {data.get('error', 'unknown error')}"
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK if data.get("created") else AgentStatus.ERROR,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_add_learning_resource"],
+                data=data,
+            )
+
+        # PROGRESS UPDATE
+        if any(k in msg_lower for k in ["progress", "finished chapter", "page", "completed %", "i'm at"]):
+            raw = await tool_get_learning_status(user_id)
+            data = _safe_json_loads(raw, fallback={})
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary="Here is your current learning progress.",
+                conflicts=[],
+                actions_taken=["tool_get_learning_status"],
+                data=data,
+            )
+
+        # SAVE NOTE
+        if any(k in msg_lower for k in ["save this note", "take a note", "i learned", "note:", "save note"]):
+            import re as _re
+            # Extract note content after "note:" or "note that" or just use full message
+            note_match = _re.search(r"(?:note:|save.*?note:?|i learned[:\s]+)(.*)", message, _re.IGNORECASE)
+            note_content = note_match.group(1).strip() if note_match else message
+            # Guess resource from context
+            resource_title = "Python Crash Course"
+            for keyword in ["python", "gcp", "cloud", "atomic", "habits", "system design"]:
+                if keyword in msg_lower:
+                    resource_title = keyword.title()
+                    break
+            raw = await tool_log_study_note(
+                user_id=user_id,
+                resource_title=resource_title,
+                note_content=note_content,
+            )
+            data = _safe_json_loads(raw, fallback={})
+            saved = data.get("saved", False)
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK if saved else AgentStatus.ERROR,
+                summary=f"Note saved for '{resource_title}'." if saved else f"Failed to save note: {data.get('error', '')}",
+                conflicts=[],
+                actions_taken=["tool_log_study_note"],
+                data=data,
+            )
+
+        # GET NOTES
+        if any(k in msg_lower for k in ["show my notes", "get notes", "my notes", "what did i write", "show notes"]):
+            import re as _re
+            resource_match = _re.search(r"(?:notes? on|notes? about|notes? for)\s+([A-Za-z][^,\.]+)", message, _re.IGNORECASE)
+            resource_title = resource_match.group(1).strip() if resource_match else ""
+            raw = await tool_get_notes(user_id=user_id, resource_title=resource_title)
+            data = _safe_json_loads(raw, fallback={})
+            count = data.get("count", 0)
+            summary = f"Found {count} note(s)" + (f" for '{resource_title}'." if resource_title else ".")
+            return AgentResponse(
+                agent="learning_agent",
+                status=AgentStatus.OK,
+                summary=summary,
+                conflicts=[],
+                actions_taken=["tool_get_notes"],
+                data=data,
+            )
+
+        # DEFAULT — status
+        raw = await tool_get_learning_status(user_id)
+        data = _safe_json_loads(raw, fallback={})
+        resources = data.get("resources", [])
+        titles = ", ".join(r["title"] for r in resources) if resources else "none"
+        return AgentResponse(
+            agent="learning_agent",
+            status=AgentStatus.OK,
+            summary=f"Currently studying: {titles}.",
+            conflicts=[],
+            actions_taken=["tool_get_learning_status"],
+            data=data,
+        )
+
+    except Exception as exc:
+        logger.error("Direct dispatch failed: %s", exc)
+        return AgentResponse(
+            agent="learning_agent",
+            status=AgentStatus.ERROR,
+            summary=f"Agent error: {exc}",
+            conflicts=[],
+            actions_taken=[],
+            data=None,
+        )
 
     try:
         runner = Runner(
