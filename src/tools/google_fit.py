@@ -12,6 +12,7 @@ Data source IDs used:
   - derived:com.google.sleep.segment:com.google.android.gms:merged
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone, date as DateType
 from typing import Any
@@ -194,6 +195,7 @@ async def fetch_sleep_data(user_id: str, days: int = 7) -> list[SleepSession]:
 
     try:
         data = await _fit_get(user_id, "sessions", params)
+        logger.info(f"[fetch_sleep_data] Raw sessions data for user {user_id}: {json.dumps(data)[:500]}")
     except httpx.HTTPStatusError as e:
         logger.error(f"Google Fit sessions error for user {user_id}: {e}")
         return []
@@ -288,6 +290,15 @@ async def fetch_activity_sessions(
 
     excluded_types = {69, 0, 72}  # still, in_vehicle, sleep
     sessions: list[ActivitySession] = []
+
+    # Log all activityType IDs and names for debugging
+    activity_types_seen = {}
+    for session in data.get("session", []):
+        activity_type_id = session.get("activityType", 0)
+        activity_name = ACTIVITY_TYPE_MAP.get(activity_type_id, f"activity_{activity_type_id}")
+        activity_types_seen.setdefault(activity_type_id, activity_name)
+    logger.info(f"[fetch_activity_sessions] Activity types found for user {user_id}: "
+                f"{sorted(activity_types_seen.items())}")
 
     for session in data.get("session", []):
         activity_type_id = session.get("activityType", 0)
@@ -391,53 +402,54 @@ async def fetch_daily_metrics(user_id: str, days: int = 7) -> list[DailyMetrics]
     return metrics
 
 
-async def fetch_heart_rate(user_id: str, days: int = 7) -> list[dict[str, Any]]:
-    """
-    Fetch resting heart rate per day for the last `days` days.
-    Returns list of {date, resting_heart_rate} dicts.
-    """
-    start, end = _days_range(days)
-    body = {
-        "aggregateBy": [
-            {
-                "dataTypeName": "com.google.heart_rate.bpm",
-                "dataSourceId": (
-                    "derived:com.google.heart_rate.bpm:"
-                    "com.google.android.gms:resting_heart_rate<-merge_heart_rate_summary"
-                ),
-            }
-        ],
-        "bucketByTime": {"durationMillis": 86400000},
-        "startTimeMillis": int(start.timestamp() * 1000),
-        "endTimeMillis": int(end.timestamp() * 1000),
-    }
+# async def fetch_heart_rate(user_id: str, days: int = 7) -> list[dict[str, Any]]:
+#     """
+#     Fetch resting heart rate per day for the last `days` days.
+#     Returns list of {date, resting_heart_rate} dicts.
+#     """
+#     start, end = _days_range(days)
+#     body = {
+#         "aggregateBy": [
+#             {
+#                 "dataTypeName": "com.google.heart_rate.bpm",
+#                 "dataSourceId": (
+#                     "derived:com.google.heart_rate.bpm:"
+#                     "com.google.android.gms:resting_heart_rate<-merge_heart_rate_summary"
+#                 ),
+#             }
+#         ],
+#         "bucketByTime": {"durationMillis": 86400000},
+#         "startTimeMillis": int(start.timestamp() * 1000),
+#         "endTimeMillis": int(end.timestamp() * 1000),
+#     }
 
-    try:
-        data = await _fit_post(user_id, "dataset:aggregate", body)
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Google Fit heart rate error: {e}")
-        return []
+#     try:
+#         data = await _fit_post(user_id, "dataset:aggregate", body)
+#         logger.info(f"[fetch_heart_rate] Raw heart rate data for user {user_id}: {json.dumps(data)[:500]}")
+#     except httpx.HTTPStatusError as e:
+#         logger.error(f"Google Fit heart rate error: {e}")
+#         return []
 
-    results: list[dict[str, Any]] = []
-    for bucket in data.get("bucket", []):
-        bucket_start_ms = int(bucket.get("startTimeMillis", 0))
-        day_str = datetime.fromtimestamp(
-            bucket_start_ms / 1000, tz=timezone.utc
-        ).strftime("%Y-%m-%d")
+#     results: list[dict[str, Any]] = []
+#     for bucket in data.get("bucket", []):
+#         bucket_start_ms = int(bucket.get("startTimeMillis", 0))
+#         day_str = datetime.fromtimestamp(
+#             bucket_start_ms / 1000, tz=timezone.utc
+#         ).strftime("%Y-%m-%d")
 
-        rhr: float | None = None
-        for dataset in bucket.get("dataset", []):
-            for point in dataset.get("point", []):
-                for val in point.get("value", []):
-                    fp = val.get("fpVal")
-                    if fp:
-                        rhr = round(fp, 1)
+#         rhr: float | None = None
+#         for dataset in bucket.get("dataset", []):
+#             for point in dataset.get("point", []):
+#                 for val in point.get("value", []):
+#                     fp = val.get("fpVal")
+#                     if fp:
+#                         rhr = round(fp, 1)
 
-        if rhr is not None:
-            results.append({"date": day_str, "resting_heart_rate": rhr})
+#         if rhr is not None:
+#             results.append({"date": day_str, "resting_heart_rate": rhr})
 
-    results.sort(key=lambda r: r["date"], reverse=True)
-    return results
+#     results.sort(key=lambda r: r["date"], reverse=True)
+#     return results
 
 
 # ── Window-level helpers (internal) ──────────────────────────────────────────

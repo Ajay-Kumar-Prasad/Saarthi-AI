@@ -110,6 +110,11 @@ async def save_daily_metrics(user_id: str, metrics: list[DailyMetrics]) -> int:
     count = 0
     try:
         for m in metrics:
+            # Convert date string to date object if needed
+            if isinstance(m.date, str):
+                date_obj = datetime.strptime(m.date, "%Y-%m-%d").date()
+            else:
+                date_obj = m.date
             await conn.execute(
                 """
                 INSERT INTO health_daily_metrics
@@ -124,7 +129,7 @@ async def save_daily_metrics(user_id: str, metrics: list[DailyMetrics]) -> int:
                     synced_at          = NOW()
                 """,
                 user_id,
-                m.date,
+                date_obj,
                 m.total_steps,
                 m.total_calories,
                 m.active_minutes,
