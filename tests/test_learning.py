@@ -162,6 +162,94 @@ async def test_get_all_resources(mock_conn):
     assert resources[0]["title"] == "Python Crash Course"
 
 
+@pytest.mark.asyncio
+async def test_create_study_session_idempotent_duplicate_returns_existing(mock_conn):
+    """
+    Simulate duplicate inserts for same (user_id, resource_id, scheduled_at):
+    first call creates, second call returns existing due to ON CONFLICT.
+    """
+    from db.schemas import StudySession
+
+    created_row = {
+        "id": "sess-001",
+        "user_id": "test-user",
+        "resource_id": "res-001",
+        "title": "Study: Python Crash Course",
+        "scheduled_at": datetime(2026, 6, 1, 6, 0, 0),
+        "duration_minutes": 60,
+        "calendar_event_id": "evt-001",
+        "completed": False,
+        "notes": None,
+    }
+
+    mock_conn.fetchrow.side_effect = [
+        {"id": "res-001"},  # first call ownership check
+        created_row,        # first call insert created
+        {"id": "res-001"},  # second call ownership check
+        None,               # second call insert conflict (DO NOTHING)
+        created_row,        # second call fetch existing
+    ]
+
+    session = StudySession(
+        user_id="test-user",
+        resource_id="res-001",
+        title="Study: Python Crash Course",
+        scheduled_at=datetime(2026, 6, 1, 6, 0, 0),
+        duration_minutes=60,
+        calendar_event_id="evt-001",
+    )
+
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import create_study_session
+        first = await create_study_session(session)
+        second = await create_study_session(session)
+
+    assert first["id"] == "sess-001"
+    assert first["_idempotency"] == "created"
+    assert second["id"] == "sess-001"
+    assert second["_idempotency"] == "existing"
+
+
+@pytest.mark.asyncio
+async def test_create_study_session_conflict_path_returns_existing(mock_conn):
+    """Conflict path should fetch and return existing row."""
+    from db.schemas import StudySession
+
+    existing_row = {
+        "id": "sess-existing-001",
+        "user_id": "test-user",
+        "resource_id": "res-001",
+        "title": "Study: Python Crash Course",
+        "scheduled_at": datetime(2026, 6, 2, 6, 0, 0),
+        "duration_minutes": 60,
+        "calendar_event_id": "evt-existing-001",
+        "completed": False,
+        "notes": None,
+    }
+
+    mock_conn.fetchrow.side_effect = [
+        {"id": "res-001"},  # ownership check
+        None,               # insert conflict
+        existing_row,       # fetch existing
+    ]
+
+    session = StudySession(
+        user_id="test-user",
+        resource_id="res-001",
+        title="Study: Python Crash Course",
+        scheduled_at=datetime(2026, 6, 2, 6, 0, 0),
+        duration_minutes=60,
+        calendar_event_id="evt-new-should-not-persist",
+    )
+
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import create_study_session
+        result = await create_study_session(session)
+
+    assert result["id"] == "sess-existing-001"
+    assert result["_idempotency"] == "existing"
+
+
 # ── Agent tool function tests ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -949,17 +1037,44 @@ async def test_query_learning_history_blocks_write_sql():
 
 @pytest.mark.asyncio
 async def test_query_learning_history_blocks_unscoped_sql():
-    """SQL without user_id in it should be blocked."""
+    """SQL without user_id should be safely tenant-scoped and executed."""
     mock_conn = AsyncMock()
     mock_conn.close = AsyncMock()
-    mock_conn.fetch.return_value = [
-        {"google_ml.nl_to_sql": "SELECT * FROM learning_resources"}
+    mock_conn.fetch.side_effect = [
+        [{"google_ml.nl_to_sql": "SELECT * FROM learning_resources"}],
+        [{"id": "res-001", "user_id": "test-user", "title": "Python Crash Course"}],
     ]
     with patch("db.learning_db.get_connection", return_value=mock_conn):
         from db.learning_db import query_learning_history_safe
         result = await query_learning_history_safe("test-user", "show everything")
-    assert "error" in result
-    assert "user-scoped" in result["error"]
+    assert result["status"] == "ok"
+    assert len(result["data"]) == 1
+    assert result["data"][0]["user_id"] == "test-user"
+    # Ensure user_id is passed as a bound parameter in execution call.
+    execute_call = mock_conn.fetch.call_args_list[1]
+    assert execute_call.args[1] == "test-user"
+
+
+@pytest.mark.asyncio
+async def test_query_learning_history_cross_user_predicate_is_neutralized():
+    """
+    Even if generated SQL filters another user, tenant scoping must enforce the
+    provided user_id parameter during execution.
+    """
+    mock_conn = AsyncMock()
+    mock_conn.close = AsyncMock()
+    mock_conn.fetch.side_effect = [
+        [{"google_ml.nl_to_sql": "SELECT * FROM learning_resources WHERE user_id = 'other-user'"}],
+        [],
+    ]
+    with patch("db.learning_db.get_connection", return_value=mock_conn):
+        from db.learning_db import query_learning_history_safe
+        result = await query_learning_history_safe("test-user", "show my resources")
+
+    assert result["status"] == "ok"
+    # Second fetch is the executed scoped query.
+    execute_call = mock_conn.fetch.call_args_list[1]
+    assert execute_call.args[1] == "test-user"
 
 
 # ── Tool 11: flashcard review — action=review ────────────────────────────────
