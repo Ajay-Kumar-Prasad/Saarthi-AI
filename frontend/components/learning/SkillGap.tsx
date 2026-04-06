@@ -76,13 +76,13 @@ export default function SkillGap() {
             </div>
           )}
 
-          {Array.isArray(gap.matched) && gap.matched.length > 0 && (
+          {Array.isArray(gap.skills_you_have) && (gap.skills_you_have as string[]).length > 0 && (
             <div>
               <p className="text-green-600 dark:text-green-400 text-xs font-semibold uppercase tracking-wide mb-2">
-                You already have ({(gap.matched as string[]).length})
+                You already have ({(gap.skills_you_have as string[]).length})
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {(gap.matched as string[]).map((s) => (
+                {(gap.skills_you_have as string[]).map((s) => (
                   <span key={s} className="text-xs bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 border border-green-200 dark:border-green-900 px-2.5 py-1 rounded-full">{s}</span>
                 ))}
               </div>

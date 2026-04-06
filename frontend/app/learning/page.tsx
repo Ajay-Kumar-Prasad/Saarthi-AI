@@ -27,8 +27,19 @@ export default function LearningPage() {
         body: JSON.stringify({ user_id: USER_ID }),
       })
       if (!res.ok) { setError(true); return }
-      const data = await res.json()
-      setStatus(data)
+      const raw = await res.json()
+
+      // Normalise: the API may return the payload nested under `data`,
+      // or it may be flat. Either way we guarantee arrays are never undefined.
+      const payload = raw?.data ?? raw
+      const normalised: LearningStatus = {
+        resources:         Array.isArray(payload?.resources)         ? payload.resources         : [],
+        upcoming_sessions: Array.isArray(payload?.upcoming_sessions) ? payload.upcoming_sessions : [],
+        active_goals:      Array.isArray(payload?.active_goals)      ? payload.active_goals      : [],
+        weekly_hours_studied: payload?.weekly_hours_studied ?? 0,
+        streak_days:          payload?.streak_days          ?? 0,
+      }
+      setStatus(normalised)
       setError(false)
     } catch {
       setError(true)

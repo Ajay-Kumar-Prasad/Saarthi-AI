@@ -5,7 +5,7 @@ import { api } from "@/lib/api"
 const USER_ID = "00000000-0000-0000-0000-000000000001"
 
 type Step = {
-  id?: number
+  id?: string
   title: string
   status: string
   why_this: string
@@ -31,7 +31,7 @@ const STATUS_ICON: Record<string, string> = {
   completed: "✓", in_progress: "◎", pending: "○", skipped: "—",
 }
 
-async function updateStep(pathId: number, stepId: number, status: string) {
+async function updateStep(pathId: string, stepId: string, status: string) {
   const res = await fetch("/api/learning/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -49,7 +49,7 @@ export default function LearningPath() {
   const [loading, setLoading] = useState(false)
   const [role, setRole] = useState("")
   const [pathTitle, setPathTitle] = useState("")
-  const [pathId, setPathId] = useState<number | null>(null)
+  const [pathId, setPathId] = useState<string | null>(null)
   const [updatingStep, setUpdatingStep] = useState<number | null>(null)
 
   async function create() {
@@ -61,7 +61,7 @@ export default function LearningPath() {
       const pathData = raw?.learning_path as Record<string, unknown>
       const path = pathData?.path as Record<string, unknown>
       setPathTitle(String(path?.title ?? `Road to ${role}`))
-      setPathId(Number(path?.id ?? null))
+      setPathId(String(path?.id ?? ""))
       setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
     } finally { setLoading(false) }
   }
@@ -71,16 +71,25 @@ export default function LearningPath() {
     try {
       const res = await api.learning.path("Show my learning path")
       const raw = res?.data as Record<string, unknown>
-      const pathData = raw?.path as Record<string, unknown> ?? {}
+      const paths = raw?.paths as Record<string, unknown>[]
+      if (!paths?.length) return
+
+      const latest = paths[0]
+      const pathIdVal = String(latest?.id ?? "")
+      const res2 = await api.learning.path(`Show my learning path id=${pathIdVal}`)
+      const raw2 = res2?.data as Record<string, unknown>
+      const pathData = raw2?.path as Record<string, unknown> ?? {}
+
       setPathTitle(String(pathData?.title ?? "My Learning Path"))
-      setPathId(Number(pathData?.id ?? null))
+      setPathId(String(pathData?.id ?? ""))
       setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
     } finally { setLoading(false) }
   }
 
   async function cycleStepStatus(step: Step, idx: number) {
     if (!pathId || !step.id) return
-    const nextStatus = STATUS_CYCLE[step.status] ?? "in_progress"
+    const currentStatus = step.status ?? "pending"
+    const nextStatus = STATUS_CYCLE[currentStatus] ?? "in_progress"
     setUpdatingStep(idx)
     try {
       await updateStep(pathId, step.id, nextStatus)
@@ -112,6 +121,12 @@ export default function LearningPath() {
           className="px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-700 dark:text-white text-sm rounded-lg transition-colors">
           Load
         </button>
+        {steps.length > 0 && (
+          <button onClick={() => { setSteps([]); setPathId(null); setPathTitle("") }}
+            className="px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 text-sm rounded-lg transition-colors">
+            ✕
+          </button>
+        )}
       </div>
 
       {steps.length > 0 && (
@@ -125,50 +140,58 @@ export default function LearningPath() {
                 </span>
               </div>
               <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-indigo-500 rounded-full transition-all duration-500"
-                  style={{ width: `${progress}%` }}
-                />
+                <div className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                  style={{ width: `${progress}%` }} />
               </div>
             </div>
           )}
 
-          {steps.map((s, i) => (
-            <div key={i}
-              className={`border rounded-xl p-3.5 transition-colors ${STATUS_STYLE[s.status] ?? STATUS_STYLE.pending} ${s.id && pathId ? "cursor-pointer hover:opacity-80" : ""}`}
-              onClick={() => s.id && pathId && cycleStepStatus(s, i)}
-              title={s.id && pathId ? "Click to advance status" : undefined}
-            >
-              <div className="flex items-start gap-2.5">
-                <span className={`font-bold text-sm mt-0.5 w-5 shrink-0 text-center transition-opacity ${updatingStep === i ? "opacity-30" : ""}`}>
-                  {updatingStep === i ? "…" : (STATUS_ICON[s.status] ?? "○")}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-sm">{s.title}</span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {s.estimated_hours && (
-                        <span className="text-xs opacity-60">{s.estimated_hours}h</span>
-                      )}
-                      <span className={`text-xs px-2 py-0.5 rounded-full border capitalize
-                        ${s.status === "completed"   ? "border-green-300 dark:border-green-700 bg-green-100 dark:bg-green-900/30" :
-                          s.status === "in_progress" ? "border-indigo-300 dark:border-indigo-700 bg-indigo-100 dark:bg-indigo-900/30" :
-                          "border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800"}`}>
-                        {s.status.replace("_", " ")}
-                      </span>
+          {steps.map((s, i) => {
+            const status = s.status ?? "pending"
+            return (
+              <div key={i}
+                className={`border rounded-xl p-3.5 transition-colors ${STATUS_STYLE[status] ?? STATUS_STYLE.pending} ${s.id && pathId ? "cursor-pointer hover:opacity-80" : ""}`}
+                onClick={() => s.id && pathId && cycleStepStatus(s, i)}
+                title={s.id && pathId ? "Click to advance status" : undefined}
+              >
+                <div className="flex items-start gap-2.5">
+                  <span className={`font-bold text-sm mt-0.5 w-5 shrink-0 text-center transition-opacity ${updatingStep === i ? "opacity-30" : ""}`}>
+                    {updatingStep === i ? "…" : (STATUS_ICON[status] ?? "○")}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm">{s.title}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {s.estimated_hours && (
+                          <span className="text-xs opacity-60">{s.estimated_hours}h</span>
+                        )}
+                        <span className={`text-xs px-2 py-0.5 rounded-full border capitalize
+                          ${status === "completed"   ? "border-green-300 dark:border-green-700 bg-green-100 dark:bg-green-900/30" :
+                            status === "in_progress" ? "border-indigo-300 dark:border-indigo-700 bg-indigo-100 dark:bg-indigo-900/30" :
+                            "border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800"}`}>
+                          {status.replace("_", " ")}
+                        </span>
+                      </div>
                     </div>
+                    {s.why_this && (
+                      <p className="text-xs opacity-60 mt-1 leading-relaxed">{s.why_this}</p>
+                    )}
                   </div>
-                  {s.why_this && (
-                    <p className="text-xs opacity-60 mt-1 leading-relaxed">{s.why_this}</p>
-                  )}
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {pathId && (
             <p className="text-gray-400 text-xs text-center pt-1">Click any step to advance its status</p>
           )}
+        </div>
+      )}
+
+      {steps.length === 0 && !loading && (
+        <div className="border border-dashed border-gray-200 dark:border-gray-700 rounded-xl p-6 text-center">
+          <p className="text-gray-400 text-sm">No path loaded.</p>
+          <p className="text-gray-500 text-xs mt-1">Type a role and hit Build, or click Load to view existing.</p>
         </div>
       )}
     </div>
