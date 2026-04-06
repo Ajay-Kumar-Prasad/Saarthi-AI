@@ -25,7 +25,7 @@ Returns:
 import re
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import uuid
 
 from typing import Any
@@ -499,7 +499,7 @@ async def tool_create_study_goal(
     goal = StudyGoal(
         user_id=user_id,
         title=title,
-        target_date=target_date,
+        target_date=target_date if target_date else None,
         weekly_hours_target=weekly_hours_target,
         resource_id=resource_id or None,
     )
@@ -1177,6 +1177,39 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 actions_taken=["tool_get_learning_status"],
                 data=data,
             )
+        
+        # CREATE FLASHCARD
+        if any(k in msg_lower for k in ["create a flashcard", "create flashcard"]):
+            import re as _re
+            q_match = _re.search(r'question="([^"]+)"', message)
+            a_match = _re.search(r'answer="([^"]+)"', message)
+            r_match = _re.search(r'resource_id=([\w-]+)', message)
+            if q_match and a_match and r_match:
+                raw = await tool_schedule_flashcard_review(
+                    user_id=user_id,
+                    action="create",
+                    resource_id=r_match.group(1),
+                    question=q_match.group(1),
+                    answer=a_match.group(1),
+                )
+                data = _safe_json_loads(raw, fallback={})
+                return AgentResponse(
+                    agent="learning_agent",
+                    status=AgentStatus.OK,
+                    summary=data.get("message", "Flashcard created!"),
+                    conflicts=[],
+                    actions_taken=["tool_schedule_flashcard_review"],
+                    data=data,
+                )
+            else:
+                return AgentResponse(
+                    agent="learning_agent",
+                    status=AgentStatus.ERROR,
+                    summary="Could not parse flashcard. Use format: question=\"...\", answer=\"...\", resource_id=...",
+                    conflicts=[],
+                    actions_taken=[],
+                    data={"message": message},
+                )
 
         # FLASHCARDS
         if any(k in msg_lower for k in ["flashcard", "review card", "due card", "spaced repetition"]):
@@ -1333,7 +1366,41 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 actions_taken=["tool_get_notes"],
                 data=data,
             )
-
+        
+        # CREATE STUDY GOAL
+        if any(k in msg_lower for k in ["create a study goal", "study goal", "create goal", "new goal"]):
+            import re as _re
+            title_match = _re.search(r'title="([^"]+)"', message)
+            hours_match = _re.search(r'weekly target=([\d.]+)', message)
+            date_match  = _re.search(r'target date=([\d-]+)', message)
+            if title_match and hours_match:
+                raw = await tool_create_study_goal(
+                    user_id=user_id,
+                    title=title_match.group(1),
+                    weekly_hours_target=float(hours_match.group(1)),
+                    target_date=date_match.group(1) if date_match else None,
+                )
+                data = _safe_json_loads(raw, fallback={})
+                created = data.get("created", False)
+                return AgentResponse(
+                    agent="learning_agent",
+                    status=AgentStatus.OK if created else AgentStatus.ERROR,
+                    summary=f"Goal '{title_match.group(1)}' created!" if created else f"Failed: {data.get('error', '')}",
+                    conflicts=[],
+                    actions_taken=["tool_create_study_goal"],
+                    data=data,
+                )
+            else:
+                # Regex didn't match — log and return error instead of falling through
+                logger.warning("CREATE STUDY GOAL: regex failed on message: %s", message)
+                return AgentResponse(
+                    agent="learning_agent",
+                    status=AgentStatus.ERROR,
+                    summary="Could not parse goal details. Use format: title=\"Your Goal\", weekly target=5 hours",
+                    conflicts=[],
+                    actions_taken=[],
+                    data={"message": message},
+                )
         # DEFAULT — status
         raw = await tool_get_learning_status(user_id)
         data = _safe_json_loads(raw, fallback={})

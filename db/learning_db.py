@@ -6,7 +6,7 @@ These are called by learning_tools.py and the learning agent directly.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from uuid import uuid4
 
 try:
@@ -250,7 +250,7 @@ async def create_study_goal(goal: StudyGoal) -> dict:
             goal.user_id,
             goal.resource_id,
             goal.title,
-            goal.target_date,
+            date.fromisoformat(goal.target_date) if goal.target_date else None,
             goal.weekly_hours_target,
             goal.progress_pct,
             goal.status,
