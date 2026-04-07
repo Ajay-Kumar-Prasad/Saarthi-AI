@@ -6,6 +6,7 @@ return this same shape so the orchestrator can aggregate responses uniformly.
 """
 
 from enum import Enum
+from datetime import date, datetime
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -43,10 +44,10 @@ class SleepSession(BaseModel):
 
 
 class ActivitySession(BaseModel):
-    date: str
+    date: date
     activity_type: str
-    start_time: str
-    end_time: str
+    start_time: datetime
+    end_time: datetime
     duration_minutes: int
     calories_burned: float | None = None
     steps: int | None = None

@@ -61,7 +61,8 @@ async def save_sleep_sessions(user_id: str, sessions: list[SleepSession]) -> int
 async def save_activity_sessions(user_id: str, sessions: list[ActivitySession]) -> int:
     """
     Persist a list of activity sessions to health_activity_logs.
-    Returns the number of rows inserted.
+    Uses ON CONFLICT (user_id, start_time) DO UPDATE to prevent duplicates on re-sync.
+    Returns the number of rows upserted.
     """
     if not sessions:
         return 0
@@ -77,6 +78,15 @@ async def save_activity_sessions(user_id: str, sessions: list[ActivitySession]) 
                      duration_minutes, calories_burned, steps, distance_meters, avg_heart_rate)
                 VALUES ($1, $2::DATE, $3, $4::TIMESTAMPTZ, $5::TIMESTAMPTZ,
                         $6, $7, $8, $9, $10)
+                ON CONFLICT (user_id, start_time) DO UPDATE SET
+                    date             = EXCLUDED.date,
+                    activity_type    = EXCLUDED.activity_type,
+                    end_time         = EXCLUDED.end_time,
+                    duration_minutes = EXCLUDED.duration_minutes,
+                    calories_burned  = EXCLUDED.calories_burned,
+                    steps            = EXCLUDED.steps,
+                    distance_meters  = EXCLUDED.distance_meters,
+                    avg_heart_rate   = EXCLUDED.avg_heart_rate
                 """,
                 user_id,
                 session.date,
@@ -93,7 +103,7 @@ async def save_activity_sessions(user_id: str, sessions: list[ActivitySession]) 
     finally:
         await conn.close()
 
-    logger.info(f"Saved {count} activity sessions for user {user_id}")
+    logger.info(f"Upserted {count} activity sessions for user {user_id}")
     return count
 
 
