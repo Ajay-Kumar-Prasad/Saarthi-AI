@@ -45,8 +45,6 @@ export async function POST(req: NextRequest) {
   const prompt = getLatestUserPrompt(body)
   const activeAgents = body.activeAgents ?? body.active_agents ?? []
   const domains = activeAgents.map((agent) => agent.toLowerCase())
-  const hasWorkAgent = domains.includes("work")
-  const endpoint = hasWorkAgent ? `${API}/work/chat` : `${API}/learning/chat`
 
   if (!prompt) {
     return new Response("", {
@@ -57,7 +55,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(`${API}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

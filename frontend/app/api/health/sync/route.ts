@@ -1,9 +1,6 @@
 import { cookies } from "next/headers"
 import { NextRequest, NextResponse } from "next/server"
 
-// POST /api/health/sync
-// Calls the backend /health/status to sync and return the latest health data.
-// Also updates the health_last_sync cookie to today's date so we only sync once per day.
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies()
   const userId = cookieStore.get("health_user_id")?.value
@@ -16,7 +13,8 @@ export async function POST(request: NextRequest) {
   const days = body.days ?? 30
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/health/status", {
+    const api = process.env.API_URL ?? "http://localhost:8080"
+    const res = await fetch(`${api}/health/sync`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, days }),
@@ -30,7 +28,6 @@ export async function POST(request: NextRequest) {
 
     const data = await res.json()
 
-    // Mark last sync as today
     cookieStore.set("health_last_sync", new Date().toISOString().slice(0, 10), {
       httpOnly: true,
       path: "/",
