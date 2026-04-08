@@ -1,0 +1,80 @@
+import { NextRequest } from "next/server"
+
+const API = process.env.API_URL ?? "http://localhost:8080"
+
+type ChatRequestBody = {
+  prompt?: string
+  messages?: Array<{ role: string; content: string }>
+  activeAgents?: string[]
+  user_id?: string
+}
+
+function getLatestUserPrompt(body: ChatRequestBody): string {
+  if (body.prompt && body.prompt.trim()) return body.prompt.trim()
+  const latest = [...(body.messages ?? [])].reverse().find((m) => m.role === "user")
+  return latest?.content?.trim() ?? ""
+}
+
+function toTokenStream(text: string) {
+  const encoder = new TextEncoder()
+  const tokens = text.split(/(\s+)/).filter((token) => token.length > 0)
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      let index = 0
+
+      function pushNext() {
+        if (index >= tokens.length) {
+          controller.close()
+          return
+        }
+
+        controller.enqueue(encoder.encode(tokens[index]))
+        index += 1
+        setTimeout(pushNext, 18)
+      }
+
+      pushNext()
+    },
+  })
+}
+
+export async function POST(req: NextRequest) {
+  const body = (await req.json()) as ChatRequestBody
+  const prompt = getLatestUserPrompt(body)
+
+  if (!prompt) {
+    return new Response("", {
+      status: 200,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+    })
+  }
+
+  const response = await fetch(`${API}/learning/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: body.user_id ?? "00000000-0000-0000-0000-000000000001",
+      message: prompt,
+      active_agents: body.activeAgents ?? [],
+    }),
+  })
+
+  if (!response.ok) {
+    return new Response("Streaming request failed", { status: response.status })
+  }
+
+  const payload = await response.json()
+  const assistantText = String(payload?.summary ?? payload?.message ?? "Done.")
+
+  return new Response(toTokenStream(assistantText), {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Saarthi-Agents": JSON.stringify(body.activeAgents ?? ["learning"]),
+    },
+  })
+}
