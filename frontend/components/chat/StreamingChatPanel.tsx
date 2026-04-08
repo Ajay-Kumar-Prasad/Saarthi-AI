@@ -18,6 +18,7 @@ function resolveAgents(activeAgent?: string): string[] {
 }
 
 export default function StreamingChatPanel({ activeAgent }: StreamingChatPanelProps) {
+  console.log("STREAMING CHAT PANEL LOADED")
   const [input, setInput] = useState("")
   const [streamingAgents, setStreamingAgents] = useState<string[]>([])
   const queryClient = useQueryClient()
@@ -32,7 +33,12 @@ export default function StreamingChatPanel({ activeAgent }: StreamingChatPanelPr
       const data = await res.json()
       return Array.isArray(data?.messages) ? (data.messages as Message[]) : []
     },
-    initialData: [],
+    initialData: [
+      {
+        role: "assistant",
+        content: "Hi, I'm Saarthi. Tell me what's going on.",
+      },
+    ],
   })
 
   const sendMessageMutation = useMutation<void, Error, { text: string; agents: string[] }>({

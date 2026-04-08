@@ -131,3 +131,169 @@ async def nl_query_endpoint(req: ChatRequest):
     Example: "How many books have I completed this year?"
     """
     return await run_learning_agent(req.message, req.user_id)
+
+
+# main.py
+from dotenv import load_dotenv
+load_dotenv()
+
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+
+from agents.orchestrator import run_orchestrator
+from agents.learning_agent import run_learning_agent, normalize_agent_response
+from db.schemas import AgentResponse
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Saarthi AI — starting up")
+    yield
+    logger.info("Saarthi AI — shutting down")
+
+
+app = FastAPI(
+    title="Saarthi AI",
+    description="सारथी — Multi-agent personal intelligence system.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Shared request bodies ─────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    message: str
+    user_id: str = "00000000-0000-0000-0000-000000000001"
+
+class StatusRequest(BaseModel):
+    user_id: str = "00000000-0000-0000-0000-000000000001"
+
+class OrchestratorRequest(BaseModel):
+    message: str
+    user_id: str = "00000000-0000-0000-0000-000000000001"
+    domains: Optional[list[str]] = None   # ["learning","health"] or None = all
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "saarthi-ai"}
+
+
+# ── Orchestrator (main chat endpoint) ─────────────────────────────────────────
+
+@app.post("/chat")
+async def chat(req: OrchestratorRequest):
+    """
+    Full multi-agent orchestration. Pass domains=["learning","health"] to
+    query only specific agents. Default queries all five.
+    """
+    return await run_orchestrator(req.message, req.user_id, req.domains)
+
+
+# ── Learning agent routes ─────────────────────────────────────────────────────
+
+@app.post("/learning/chat", response_model=AgentResponse)
+async def learning_chat(req: ChatRequest):
+    response = await run_learning_agent(req.message, req.user_id)
+    if response.status == "error":
+        raise HTTPException(status_code=500, detail=response.summary)
+    return response
+
+@app.post("/learning/status", response_model=AgentResponse)
+async def learning_status(req: StatusRequest):
+    from agents.learning_agent import tool_get_learning_status
+    raw = await tool_get_learning_status(req.user_id)
+    return normalize_agent_response(raw, "learning_agent", "tool_get_learning_status")
+
+@app.post("/learning/add-resource", response_model=AgentResponse)
+async def learning_add_resource(req: ChatRequest):
+    return await run_learning_agent(req.message, req.user_id)
+
+@app.post("/learning/schedule", response_model=AgentResponse)
+async def learning_schedule(req: ChatRequest):
+    return await run_learning_agent(req.message, req.user_id)
+
+@app.post("/learning/query", response_model=AgentResponse)
+async def learning_query(req: ChatRequest):
+    return await run_learning_agent(req.message, req.user_id)
+
+
+# ── Work agent routes (Hariharan adds these) ──────────────────────────────────
+
+@app.post("/work/chat", response_model=AgentResponse)
+async def work_chat(req: ChatRequest):
+    from agents.work_agent import run_work_agent
+    return await run_work_agent(req.message, req.user_id)
+
+
+# ── Health agent routes (Joshna adds these) ───────────────────────────────────
+
+@app.post("/health/chat", response_model=AgentResponse)
+async def health_chat(req: ChatRequest):
+    from agents.health_agent import run_health_agent
+    return await run_health_agent(req.message, req.user_id)
+
+@app.post("/health/status")
+async def health_status(req: StatusRequest):
+    from agents.health_agent import run_health_agent
+    return await run_health_agent("What is my current health status?", req.user_id)
+
+
+# ── Finance agent routes (Shubham adds these) ─────────────────────────────────
+
+@app.post("/finance/chat", response_model=AgentResponse)
+async def finance_chat(req: ChatRequest):
+    from agents.finance_agent import run_finance_agent
+    return await run_finance_agent(req.message, req.user_id)
+
+
+# ── Social agent routes (Team adds these) ─────────────────────────────────────
+
+@app.post("/social/chat", response_model=AgentResponse)
+async def social_chat(req: ChatRequest):
+    from agents.social_agent import run_social_agent
+    return await run_social_agent(req.message, req.user_id)
+
+
+# ── Proactive morning briefing (Cloud Scheduler hits this) ────────────────────
+
+@app.post("/proactive/morning-briefing")
+async def morning_briefing(req: StatusRequest):
+    return await run_orchestrator(
+        "Good morning. Give me my full daily briefing across all life domains.",
+        req.user_id,
+    )
+
+
+# ── Privacy / GDPR ────────────────────────────────────────────────────────────
+
+@app.delete("/user/{user_id}/all-data")
+async def erase_user_data(user_id: str):
+    from db.alloydb import get_connection
+    conn = await get_connection()
+    try:
+        tables = ["life_logs", "study_sessions", "study_goals", "learning_resources",
+                  "flashcards", "learning_paths", "learning_path_steps",
+                  "user_skills", "goals"]
+        for table in tables:
+            await conn.execute(f"DELETE FROM {table} WHERE user_id = $1", user_id)
+        return {"erased": True, "user_id": user_id, "tables": tables}
+    finally:
+        await conn.close()

@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, ReactNode, useState } from "react"
+import { ReactNode } from "react"
 import StreamingChatPanel from "@/components/chat/StreamingChatPanel"
 
 type MissionControlLayoutProps = {
@@ -13,23 +13,9 @@ type MissionControlLayoutProps = {
 const NAV_ITEMS = ["Work", "Health", "Finance", "Learning", "Social"]
 
 export default function MissionControlLayout({
-  chatFeed,
   contextPanel,
-  onSendMessage,
   onPrivacyKillSwitch,
 }: MissionControlLayoutProps) {
-  const [input, setInput] = useState("")
-
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const message = input.trim()
-    if (!message) return
-    onSendMessage?.(message)
-    setInput("")
-  }
-
-  const shouldUseStreamingPanel = !chatFeed && !onSendMessage
-
   return (
     <div className="min-h-screen w-full bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-white">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-5">
@@ -56,41 +42,10 @@ export default function MissionControlLayout({
           </button>
         </aside>
 
-        <main className="flex min-h-[60vh] flex-col bg-gray-50 dark:bg-gray-950 lg:col-span-3 lg:min-h-screen">
-          {shouldUseStreamingPanel ? (
+        <main className="min-h-[60vh] bg-gray-50 dark:bg-gray-950 lg:col-span-3 lg:min-h-screen">
+          <div className="flex h-full flex-col">
             <StreamingChatPanel />
-          ) : (
-            <>
-              <div className="flex-1 overflow-y-auto p-6">
-                {chatFeed ?? (
-                  <div className="rounded-xl border border-dashed border-gray-300 p-6 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                    Chat feed goes here
-                  </div>
-                )}
-              </div>
-
-              <form
-                onSubmit={handleSubmit}
-                className="border-t border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
-              >
-                <div className="flex gap-2">
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="Type your message..."
-                    className="flex-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!input.trim()}
-                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Send
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
+          </div>
         </main>
 
         <aside className="hidden border-l border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900 lg:col-span-1 lg:flex lg:flex-col">
