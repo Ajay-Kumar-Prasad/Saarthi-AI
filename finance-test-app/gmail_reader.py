@@ -6,10 +6,11 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from datetime import datetime
 
+from db import insert_expense  # ✅ ADD THIS LINE
+
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 def get_gmail_service():
-    """Get Gmail API service using pre-generated token.json (no interactive input)"""
     with open("token.json", "r") as f:
         token_data = json.load(f)
 
@@ -29,8 +30,7 @@ def get_gmail_service():
 
     return build('gmail', 'v1', credentials=creds)
 
-def read_messages_and_save(sheet, max_results=5):
-    """Fetch Gmail messages in small batches and save to Google Sheet"""
+def read_messages_and_save(sheet, max_results=200):
     service = get_gmail_service()
 
     results = service.users().messages().list(
@@ -47,7 +47,7 @@ def read_messages_and_save(sheet, max_results=5):
             txt = service.users().messages().get(
                 userId='me',
                 id=msg['id'],
-                format='metadata'  # only metadata → low memory
+                format='metadata'
             ).execute()
 
             snippet = txt.get("snippet", "")
@@ -56,6 +56,7 @@ def read_messages_and_save(sheet, max_results=5):
                 continue
 
             amount = int(match.group(1))
+
             snippet_lower = snippet.lower()
             if "uber" in snippet_lower or "ola" in snippet_lower:
                 category = "transport"
@@ -66,12 +67,21 @@ def read_messages_and_save(sheet, max_results=5):
             else:
                 category = "other"
 
+            # ✅ Prepare common values
+            now = datetime.now()
+            description = snippet[:100]
+
+            # ✅ 1. SAVE TO ALLOYDB (SAFE - WON’T BREAK APP)
+            #insert_expense(amount, category, description, now)
+
+            # ✅ 2. KEEP EXISTING SHEETS LOGIC (UNCHANGED)
             sheet.append_row([
-                str(datetime.now()),
+                str(now),
                 amount,
                 category,
-                snippet[:100]
+                description
             ])
+
             saved += 1
 
         except Exception as e:

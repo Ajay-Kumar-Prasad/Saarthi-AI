@@ -4,7 +4,7 @@ import threading
 import re
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
-
+from db import insert_expense
 app = Flask(__name__)
 
 # -------------------- LAZY LOAD HELPERS --------------------
@@ -34,11 +34,24 @@ def get_model():
 
 # -------------------- TOOLS --------------------
 
+from db import insert_expense  # ADD AT TOP
+
 def save_expense(amount, category, description=""):
     try:
+        now = datetime.now()
+
+        # ✅ Save to DB FIRST
+        try:
+            insert_expense(amount, category, description, now)
+        except Exception as e:
+            print("DB failed but continuing:", e)
+
+        # ✅ Then save to Sheets
         sheet = get_sheet()
-        sheet.append_row([str(datetime.now()), amount, category, description])
+        sheet.append_row([str(now), amount, category, description])
+
         return f"✅ Saved ₹{amount} for {category}"
+
     except Exception as e:
         return f"ERROR: {str(e)}"
 
