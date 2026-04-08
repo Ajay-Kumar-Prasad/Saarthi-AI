@@ -1243,6 +1243,10 @@ learning_agent = Agent(
 
 def _is_goal_orchestration_intent(message: str) -> bool:
     lower = message.lower()
+    # Exclude skill gap / readiness queries from orchestration
+    skill_gap_phrases = ["missing", "skill", "gap", "ready", "readiness", "what do i need", "how ready"]
+    if any(p in lower for p in skill_gap_phrases):
+        return False
     return (
         ("become" in lower or "roadmap" in lower or "learning path" in lower)
         and bool(_detect_role_from_text(lower))
@@ -1624,7 +1628,7 @@ async def _run_goal_orchestration(message: str, user_id: str) -> AgentResponse:
 
     schedule_resp = {}
     steps = path_resp.get("steps") or []
-    if steps:
+    if steps and steps[0].get("resource_id"):
         first_step = steps[0]
         tomorrow = (datetime.utcnow().date() + timedelta(days=1)).isoformat()
         schedule_resp = _safe_json_loads(
@@ -1799,6 +1803,19 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
 
         # LEARNING PATH
         if any(k in msg_lower for k in ["learning path", "roadmap", "my path", "show path"]):
+            import re as _re
+            id_match = _re.search(r'id=([\w-]+)', message)
+            if id_match:
+                raw = await tool_create_learning_path(user_id=user_id, action="view", path_id=id_match.group(1))
+                data = _safe_json_loads(raw, fallback={})
+                return AgentResponse(
+                    agent="learning_agent",
+                    status=AgentStatus.OK,
+                    summary="Here is your learning path.",
+                    conflicts=[],
+                    actions_taken=["tool_create_learning_path"],
+                    data=data,
+                )
             raw = await tool_create_learning_path(user_id=user_id, action="view")
             data = _safe_json_loads(raw, fallback={})
             paths = data.get("paths", [])
