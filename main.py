@@ -132,6 +132,21 @@ async def nl_query_endpoint(req: ChatRequest):
     """
     return await run_learning_agent(req.message, req.user_id)
 
+# In saarthi-ai/main.py — add alongside other agent routes
+
+from agents.finance_agent import run as finance_run, sync_gmail_expenses
+
+@app.route("/agent/finance", methods=["POST"])
+def finance_chat():
+    user_msg = request.get_json().get("message")
+    result = finance_run(user_msg)
+    return jsonify({"reply": result.message})
+
+@app.route("/sync-gmail", methods=["POST"])
+def sync_gmail():
+    sync_gmail_expenses()
+    return jsonify({"message": "✅ Gmail sync started"})
+
 
 # main.py
 from dotenv import load_dotenv
@@ -258,10 +273,39 @@ async def health_status(req: StatusRequest):
 
 # ── Finance agent routes (Shubham adds these) ─────────────────────────────────
 
-@app.post("/finance/chat", response_model=AgentResponse)
-async def finance_chat(req: ChatRequest):
-    from agents.finance_agent import run_finance_agent
-    return await run_finance_agent(req.message, req.user_id)
+# Add these two routes to saarthi-ai/main.py
+# They serve the ExpenseFeed and SpendingChart components
+
+from db.finance_db import get_all_expenses
+
+@app.route("/finance/expenses", methods=["GET"])
+def finance_expenses():
+    """Returns recent expenses for the ExpenseFeed component."""
+    user_id = request.args.get("user_id")   # pass from session/auth later
+    rows = get_all_expenses(user_id)
+    expenses = [
+        {
+            "id": i,
+            "amount": float(r[0]),
+            "category": r[1],
+            "description": r[2],
+            "date": r[3].isoformat() if hasattr(r[3], "isoformat") else str(r[3]),
+        }
+        for i, r in enumerate(rows)
+    ]
+    return jsonify({"expenses": expenses})
+
+
+@app.route("/finance/summary", methods=["GET"])
+def finance_summary():
+    """Returns per-category totals for the SpendingChart component."""
+    user_id = request.args.get("user_id")
+    rows = get_all_expenses(user_id)
+    totals: dict[str, float] = {}
+    for amount, category, *_ in rows:
+        totals[category] = totals.get(category, 0) + float(amount)
+    summary = [{"category": k, "total": v} for k, v in totals.items()]
+    return jsonify({"summary": summary})
 
 
 # ── Social agent routes (Team adds these) ─────────────────────────────────────

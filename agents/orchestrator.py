@@ -9,6 +9,7 @@ from agents.work_agent import run_work_agent
 import asyncio
 import logging
 from db.schemas import AgentResponse, AgentStatus
+from agents.finance_agent import run_finance_agent
 
 logger = logging.getLogger(__name__)
 
@@ -16,17 +17,9 @@ logger = logging.getLogger(__name__)
 from agents.learning_agent import run_learning_agent
 
 # Stub runners for agents not yet integrated — replace as each teammate ships
-async def run_work_agent(message: str, user_id: str) -> AgentResponse:
-    return AgentResponse(agent="work_agent", status=AgentStatus.PARTIAL,
-        summary="Work agent not yet integrated.", conflicts=[], actions_taken=[], data=None)
-
 async def run_health_agent(message: str, user_id: str) -> AgentResponse:
     return AgentResponse(agent="health_agent", status=AgentStatus.PARTIAL,
         summary="Health agent not yet integrated.", conflicts=[], actions_taken=[], data=None)
-
-async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
-    return AgentResponse(agent="finance_agent", status=AgentStatus.PARTIAL,
-        summary="Finance agent not yet integrated.", conflicts=[], actions_taken=[], data=None)
 
 async def run_social_agent(message: str, user_id: str) -> AgentResponse:
     return AgentResponse(agent="social_agent", status=AgentStatus.PARTIAL,

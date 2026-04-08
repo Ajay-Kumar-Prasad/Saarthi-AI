@@ -6,6 +6,7 @@ type ChatRequestBody = {
   prompt?: string
   messages?: Array<{ role: string; content: string }>
   activeAgents?: string[]
+  active_agents?: string[]
   user_id?: string
 }
 
@@ -42,6 +43,10 @@ function toTokenStream(text: string) {
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as ChatRequestBody
   const prompt = getLatestUserPrompt(body)
+  const activeAgents = body.activeAgents ?? body.active_agents ?? []
+  const domains = activeAgents.map((agent) => agent.toLowerCase())
+  const hasWorkAgent = domains.includes("work")
+  const endpoint = hasWorkAgent ? `${API}/work/chat` : `${API}/learning/chat`
 
   if (!prompt) {
     return new Response("", {
@@ -52,13 +57,13 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  const response = await fetch(`${API}/learning/chat`, {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       user_id: body.user_id ?? "00000000-0000-0000-0000-000000000001",
       message: prompt,
-      active_agents: body.activeAgents ?? [],
+      domains,
     }),
   })
 
@@ -74,7 +79,7 @@ export async function POST(req: NextRequest) {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
-      "X-Saarthi-Agents": JSON.stringify(body.activeAgents ?? ["learning"]),
+      "X-Saarthi-Agents": JSON.stringify(activeAgents.length > 0 ? activeAgents : ["learning"]),
     },
   })
 }

@@ -6,7 +6,7 @@ import ThemeToggle from "./ThemeToggle"
 const nav = [
   { href: "/", label: "Dashboard", icon: "▦" },
   { href: "/learning", label: "Learning", icon: "📚" },
-  { href: "/work", label: "Work", icon: "💼", disabled: true },
+  { href: "/work", label: "Work", icon: "💼" },
   { href: "/health", label: "Health", icon: "❤️" },
   { href: "/finance", label: "Finance", icon: "💰", disabled: true },
   { href: "/social", label: "Social", icon: "👥", disabled: true },

@@ -122,6 +122,20 @@ CREATE TABLE IF NOT EXISTS study_goals (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Finance agent
+-- Add this to schema.sql, replacing the current expenses table definition
+CREATE TABLE IF NOT EXISTS expenses (
+    id          SERIAL PRIMARY KEY,
+    amount      NUMERIC(10, 2)  NOT NULL,
+    category    TEXT,
+    description TEXT,
+    date        TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    user_id     UUID REFERENCES users(id) ON DELETE CASCADE  -- match other tables
+);
+
+CREATE INDEX IF NOT EXISTS expenses_user_date_idx
+    ON expenses(user_id, date DESC);
+
 -- =============================================================================
 -- DEMO SEED DATA — delete before production
 -- =============================================================================
