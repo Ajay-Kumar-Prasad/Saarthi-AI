@@ -16,6 +16,10 @@ Then hit:
     POST /learning/query
 """
 
+import json
+
+from agents.health_agent import run_health_agent, sync_all_health_data
+from db.health_db import build_health_summary
 from dotenv import load_dotenv
 load_dotenv()
 import logging
@@ -27,6 +31,8 @@ from pydantic import BaseModel
 
 from agents.learning_agent import run_learning_agent, learning_agent, normalize_agent_response
 from db.schemas import AgentResponse
+from auth.google_oauth import router as auth_router, is_user_authenticated
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +59,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
 
 
 # ── Request bodies ────────────────────────────────────────────────────────────
@@ -65,6 +72,9 @@ class ChatRequest(BaseModel):
 class StatusRequest(BaseModel):
     user_id: str = "00000000-0000-0000-0000-000000000001"
 
+class SyncRequest(BaseModel):
+    user_id: str = "00000000-0000-0000-0000-000000000001"
+    days: int = 30
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -262,13 +272,64 @@ async def work_chat(req: ChatRequest):
 
 @app.post("/health/chat", response_model=AgentResponse)
 async def health_chat(req: ChatRequest):
-    from agents.health_agent import run_health_agent
-    return await run_health_agent(req.message, req.user_id)
+    """
+    Natural language interface to the Health Agent.
+
+    Example messages:
+    - "How did I sleep this week?"
+    - "Show me my workouts for the last 7 days"
+    - "How many steps did I take today?"
+    - "What is my resting heart rate trend?"
+    - "Analyze my health trends for the past two weeks"
+    - "How am I doing overall health-wise?"
+    """
+    response = await run_health_agent(req.message, req.user_id)
+    if response.status == "error":
+        raise HTTPException(status_code=500, detail=response.summary)
+    return response
+
 
 @app.post("/health/status")
-async def health_status(req: StatusRequest):
-    from agents.health_agent import run_health_agent
-    return await run_health_agent("What is my current health status?", req.user_id)
+async def get_status(req: StatusRequest):
+    """
+    Quick status endpoint — returns the health summary without an LLM call.
+    Useful for the Streamlit dashboard sidebar or the orchestrator's health check.
+    """
+    summary = await build_health_summary(req.user_id, days=req.days)
+    return json.loads(summary.model_dump_json())
+
+
+@app.post("/health/sync")
+async def sync_health_data(req: SyncRequest):
+    """
+    Re-pull Google Fit data and update AlloyDB for this user.
+
+    This is the ONLY endpoint that calls the Google Fit API directly.
+    It is called automatically once during OAuth onboarding.
+    Users can also call it manually here to refresh their stored data.
+
+    During normal /health/chat the agent reads from AlloyDB only.
+    """
+    result = await sync_all_health_data(req.user_id, req.days)
+    return {"status": "ok", "synced": result}
+
+
+@app.post("/health/trends")
+async def trends_endpoint(req: ChatRequest):
+    """
+    Health trend analysis endpoint.
+    Example: "What are my sleep and activity trends for the past two weeks?"
+    """
+    return await run_health_agent(req.message, req.user_id)
+
+
+@app.post("/health/query")
+async def nl_query_endpoint(req: ChatRequest):
+    """
+    AlloyDB AI natural language query over health history.
+    Example: "How many times did I work out last month?"
+    """
+    return await run_health_agent(req.message, req.user_id)
 
 
 # ── Finance agent routes (Shubham adds these) ─────────────────────────────────
