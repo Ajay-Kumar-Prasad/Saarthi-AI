@@ -8,12 +8,18 @@ const nav = [
   { href: "/learning", label: "Learning", icon: "📚" },
   { href: "/work", label: "Work", icon: "💼" },
   { href: "/health", label: "Health", icon: "❤️" },
-  { href: "/finance", label: "Finance", icon: "💰", disabled: true },
-  { href: "/social", label: "Social", icon: "👥", disabled: true },
+  { href: "/finance", label: "Finance", icon: "💰" },
+  { href: "/social", label: "Social", icon: "👥" },
 ]
 
 export default function Sidebar() {
   const path = usePathname()
+
+  const isActive = (href: string) => {
+    if (href === "/") return path === "/"
+    return path === href || path.startsWith(`${href}/`)
+  }
+
   return (
     <aside className="w-56 min-h-screen bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex flex-col py-6 px-3 shrink-0">
       <div className="px-3 mb-8">
@@ -23,17 +29,17 @@ export default function Sidebar() {
 
       <nav className="flex flex-col gap-1 flex-1">
         {nav.map((item) => {
-          const active = path === item.href
-          return item.disabled ? (
-            <div key={item.href}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-400 dark:text-gray-600 cursor-not-allowed text-sm">
-              <span className="text-base">{item.icon}</span>
-              <span>{item.label}</span>
-              <span className="ml-auto text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-600 px-1.5 py-0.5 rounded">soon</span>
-            </div>
-          ) : (
-            <Link key={item.href} href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${active ? "bg-indigo-600 text-white" : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800"}`}>
+          const active = isActive(item.href)
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                active
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
+              }`}
+            >
               <span className="text-base">{item.icon}</span>
               <span>{item.label}</span>
             </Link>

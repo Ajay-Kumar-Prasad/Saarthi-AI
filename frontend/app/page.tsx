@@ -2,12 +2,46 @@ import Header from "@/components/shared/Header"
 import Link from "next/link"
 
 const agents = [
-  { name: "Learning", href: "/learning", icon: "📚", desc: "Books, courses, flashcards, skill gaps, learning paths", owner: "Ajay Kumar Prasad", live: true,
-    stats: ["Skill gap analysis", "SM-2 flashcards", "Learning paths", "Calendar sync"] },
-  { name: "Work", href: "/work", icon: "💼", desc: "Tasks, calendar, deadlines, conflict detection", owner: "Hariharan S", live: false, stats: [] },
-  { name: "Health", href: "/health", icon: "❤️", desc: "Sleep, fitness, nutrition tracking", owner: "Joshna Ch", live: false, stats: [] },
-  { name: "Finance", href: "/finance", icon: "💰", desc: "Budget, bills, spending analysis", owner: "Shubham Negi", live: false, stats: [] },
-  { name: "Social", href: "/social", icon: "👥", desc: "Events, birthdays, relationships", owner: "Team", live: false, stats: [] },
+  {
+    name: "Learning",
+    href: "/learning",
+    icon: "📚",
+    desc: "Books, courses, flashcards, skill gaps, learning paths",
+    owner: "Ajay Kumar Prasad",
+    stats: ["Skill gap analysis", "SM-2 flashcards", "Learning paths", "Calendar sync"],
+  },
+  {
+    name: "Work",
+    href: "/work",
+    icon: "💼",
+    desc: "Tasks, meetings, emails, conflict detection",
+    owner: "Hariharan S",
+    stats: [],
+  },
+  {
+    name: "Health",
+    href: "/health",
+    icon: "❤️",
+    desc: "Sleep, fitness, activity insights",
+    owner: "Joshna Ch",
+    stats: [],
+  },
+  {
+    name: "Finance",
+    href: "/finance",
+    icon: "💰",
+    desc: "Expense tracking, budget insights",
+    owner: "Shubham Negi",
+    stats: [],
+  },
+  {
+    name: "Social",
+    href: "/social",
+    icon: "👥",
+    desc: "Events, relationships, reminders",
+    owner: "Team",
+    stats: [],
+  },
 ]
 
 export default function Dashboard() {
@@ -27,39 +61,32 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((a) => (
-            <div key={a.name} className={`border rounded-xl p-5 transition-all
-              ${a.live
-                ? "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm cursor-pointer"
-                : "bg-gray-50 dark:bg-gray-900/50 border-gray-100 dark:border-gray-800 opacity-60"}`}>
-              {a.live ? (
-                <Link href={a.href} className="block">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-3xl">{a.icon}</span>
-                    <span className="text-xs bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 border border-green-200 dark:border-green-800 px-2 py-0.5 rounded-full font-medium">live</span>
-                  </div>
-                  <h2 className="text-gray-900 dark:text-white font-bold text-lg">{a.name}</h2>
-                  <p className="text-gray-500 text-xs mt-1 leading-relaxed">{a.desc}</p>
-                  {a.stats.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-3">
-                      {a.stats.map((s) => (
-                        <span key={s} className="text-xs bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900 px-2 py-0.5 rounded-full">{s}</span>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-gray-400 text-xs mt-3 font-medium">{a.owner}</p>
-                </Link>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-3xl">{a.icon}</span>
-                    <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 px-2 py-0.5 rounded-full">soon</span>
-                  </div>
-                  <h2 className="text-gray-900 dark:text-white font-bold text-lg">{a.name}</h2>
-                  <p className="text-gray-500 text-xs mt-1 leading-relaxed">{a.desc}</p>
-                  <p className="text-gray-400 text-xs mt-3 font-medium">{a.owner}</p>
-                </>
+            <Link
+              key={a.name}
+              href={a.href}
+              className="block border rounded-xl p-5 transition-all bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm cursor-pointer"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-3xl">{a.icon}</span>
+                <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">live</span>
+              </div>
+              <h2 className="text-gray-900 dark:text-white font-bold text-lg">{a.name}</h2>
+              <p className="text-indigo-600 dark:text-indigo-400 text-xs mt-0.5">AI-powered agent</p>
+              <p className="text-gray-500 text-xs mt-2 leading-relaxed">{a.desc}</p>
+              {a.stats.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-3">
+                  {a.stats.map((s) => (
+                    <span
+                      key={s}
+                      className="text-xs bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900 px-2 py-0.5 rounded-full"
+                    >
+                      {s}
+                    </span>
+                  ))}
+                </div>
               )}
-            </div>
+              <p className="text-gray-400 text-xs mt-3 font-medium">{a.owner}</p>
+            </Link>
           ))}
         </div>
       </div>

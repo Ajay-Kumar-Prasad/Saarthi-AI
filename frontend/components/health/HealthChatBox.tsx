@@ -26,7 +26,8 @@ export default function HealthChatBox() {
     setLoading(true)
 
     try {
-      const res = await fetch("http://localhost:8000/health/chat", {
+      const API = process.env.API_URL || "http://localhost:8080"
+      const res = await fetch(`${API}/health/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -36,18 +37,9 @@ export default function HealthChatBox() {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      setMessages((prev) => [
-        ...prev,
-        { role: "agent", text: data.summary ?? "No response from agent." },
-      ])
+      setMessages((prev) => [...prev, { role: "agent", text: data.summary ?? "No response from agent." }])
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "agent",
-          text: "Could not reach Health Agent on port 8000. Make sure the server is running.",
-        },
-      ])
+      setMessages((prev) => [...prev, { role: "agent", text: "Unable to fetch data. Please try again." }])
     } finally {
       setLoading(false)
     }
@@ -88,9 +80,7 @@ export default function HealthChatBox() {
           ))}
           {loading && (
             <div className="text-sm">
-              <span className="inline-block bg-gray-800 text-gray-500 rounded-lg px-3 py-2">
-                Thinking…
-              </span>
+              <span className="inline-block bg-gray-800 text-gray-500 rounded-lg px-3 py-2">Thinking...</span>
             </div>
           )}
         </div>
@@ -106,7 +96,7 @@ export default function HealthChatBox() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about your health…"
+          placeholder="Ask about your health..."
           className="flex-1 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors"
         />
         <button

@@ -1,8 +1,6 @@
 import { cookies } from "next/headers"
 import { NextRequest, NextResponse } from "next/server"
 
-// POST /api/health/chat
-// Proxies chat messages to the backend health agent.
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies()
   const userId = cookieStore.get("health_user_id")?.value
@@ -14,7 +12,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json()
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/health/chat", {
+    const API = process.env.API_URL || "http://localhost:8080"
+    const res = await fetch(`${API}/health/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: body.message, user_id: userId }),
