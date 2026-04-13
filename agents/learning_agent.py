@@ -1673,17 +1673,43 @@ _session_service = InMemorySessionService()
 APP_NAME = "saarthi_learning_agent"
 
 
+def _build_agent_response(
+    status: AgentStatus,
+    summary: str,
+    actions_taken: list[str] | None = None,
+    data: dict | None = None,
+    conflicts: list[str] | None = None,
+) -> AgentResponse:
+    return AgentResponse(
+        agent="learning_agent",
+        status=status,
+        summary=summary,
+        conflicts=conflicts or [],
+        actions_taken=actions_taken or [],
+        data=data,
+    )
+
+
+def _is_valid_user_id(user_id: str) -> bool:
+    return isinstance(user_id, str) and bool(user_id.strip())
+
+
+def _is_valid_message(message: str) -> bool:
+    return isinstance(message, str) and bool(message.strip())
+
+
 async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
     """
     Run the learning agent directly (used for unit tests and the demo endpoint).
     In production the orchestrator calls this agent via sub_agents=[learning_agent].
     """
-    if not user_id:
-        return normalize_agent_response(
-            {"error": "Missing required user_id."},
-            "learning_agent",
-            "run_learning_agent",
-        )
+    if not _is_valid_user_id(user_id):
+        return _build_agent_response(AgentStatus.ERROR, "Missing required user_id.")
+    if not _is_valid_message(message):
+        return _build_agent_response(AgentStatus.ERROR, "Missing required message.")
+
+    message = message.strip()
+    user_id = user_id.strip()
 
     route = route_learning_request(message)
     logger.info("Learning agent routing decision route=%s user_id=%s", route, user_id)
@@ -1725,11 +1751,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 if resources
                 else "No active learning resources found. Add something to get started!"
             )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                summary,
                 actions_taken=["tool_get_learning_status"],
                 data=data,
             )
@@ -1748,21 +1772,16 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                     answer=a_match.group(1),
                 )
                 data = _safe_json_loads(raw, fallback={})
-                return AgentResponse(
-                    agent="learning_agent",
-                    status=AgentStatus.OK,
-                    summary=data.get("message", "Flashcard created!"),
-                    conflicts=[],
+                return _build_agent_response(
+                    AgentStatus.OK,
+                    data.get("message", "Flashcard created!"),
                     actions_taken=["tool_schedule_flashcard_review"],
                     data=data,
                 )
             else:
-                return AgentResponse(
-                    agent="learning_agent",
-                    status=AgentStatus.ERROR,
-                    summary='Could not parse flashcard. Use format: question="...", answer="...", resource_id=...',
-                    conflicts=[],
-                    actions_taken=[],
+                return _build_agent_response(
+                    AgentStatus.ERROR,
+                    'Could not parse flashcard. Use format: question="...", answer="...", resource_id=...',
                     data={"message": message},
                 )
 
@@ -1772,11 +1791,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             data = _safe_json_loads(raw, fallback={})
             due = data.get("due_count", 0)
             summary = f"You have {due} flashcard(s) due for review." if due else "No flashcards due right now!"
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                summary,
                 actions_taken=["tool_schedule_flashcard_review"],
                 data=data,
             )
@@ -1792,11 +1809,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 f"You are {readiness}% ready for {role}. "
                 f"Missing required skills: {', '.join(missing) if missing else 'none'}."
             )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                summary,
                 actions_taken=["tool_analyze_skill_gap"],
                 data=data,
             )
@@ -1808,11 +1823,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             if id_match:
                 raw = await tool_create_learning_path(user_id=user_id, action="view", path_id=id_match.group(1))
                 data = _safe_json_loads(raw, fallback={})
-                return AgentResponse(
-                    agent="learning_agent",
-                    status=AgentStatus.OK,
-                    summary="Here is your learning path.",
-                    conflicts=[],
+                return _build_agent_response(
+                    AgentStatus.OK,
+                    "Here is your learning path.",
                     actions_taken=["tool_create_learning_path"],
                     data=data,
                 )
@@ -1824,11 +1837,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 if paths else
                 "No learning paths found. Say 'Create a roadmap to become a Data Engineer' to start one."
             )
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                summary,
                 actions_taken=["tool_create_learning_path"],
                 data=data,
             )
@@ -1848,11 +1859,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 summary = f"Added '{title}' to your learning list."
             else:
                 summary = f"Could not add resource: {data.get('error', 'unknown error')}"
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK if data.get("created") else AgentStatus.ERROR,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK if data.get("created") else AgentStatus.ERROR,
+                summary,
                 actions_taken=["tool_add_learning_resource"],
                 data=data,
             )
@@ -1861,11 +1870,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
         if any(k in msg_lower for k in ["progress", "finished chapter", "page", "completed %", "i'm at"]):
             raw = await tool_get_learning_status(user_id)
             data = _safe_json_loads(raw, fallback={})
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary="Here is your current learning progress.",
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                "Here is your current learning progress.",
                 actions_taken=["tool_get_learning_status"],
                 data=data,
             )
@@ -1900,11 +1907,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             )
             data = _safe_json_loads(raw, fallback={})
             saved = data.get("saved", False)
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK if saved else AgentStatus.ERROR,
-                summary=f"Note saved for '{resource_title}'." if saved else f"Failed to save note: {data.get('error', '')}",
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK if saved else AgentStatus.ERROR,
+                f"Note saved for '{resource_title}'." if saved else f"Failed to save note: {data.get('error', '')}",
                 actions_taken=["tool_log_study_note"],
                 data=data,
             )
@@ -1920,11 +1925,9 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
             data = _safe_json_loads(raw, fallback={})
             count = data.get("count", 0)
             summary = f"Found {count} note(s)" + (f" for '{resource_title}'." if resource_title else ".")
-            return AgentResponse(
-                agent="learning_agent",
-                status=AgentStatus.OK,
-                summary=summary,
-                conflicts=[],
+            return _build_agent_response(
+                AgentStatus.OK,
+                summary,
                 actions_taken=["tool_get_notes"],
                 data=data,
             )
@@ -1943,22 +1946,17 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 )
                 data = _safe_json_loads(raw, fallback={})
                 created = data.get("created", False)
-                return AgentResponse(
-                    agent="learning_agent",
-                    status=AgentStatus.OK if created else AgentStatus.ERROR,
-                    summary=f"Goal '{title_match.group(1)}' created!" if created else f"Failed: {data.get('error', '')}",
-                    conflicts=[],
+                return _build_agent_response(
+                    AgentStatus.OK if created else AgentStatus.ERROR,
+                    f"Goal '{title_match.group(1)}' created!" if created else f"Failed: {data.get('error', '')}",
                     actions_taken=["tool_create_study_goal"],
                     data=data,
                 )
             else:
                 logger.warning("CREATE STUDY GOAL: regex failed on message: %s", message)
-                return AgentResponse(
-                    agent="learning_agent",
-                    status=AgentStatus.ERROR,
-                    summary='Could not parse goal details. Use format: title="Your Goal", weekly target=5 hours',
-                    conflicts=[],
-                    actions_taken=[],
+                return _build_agent_response(
+                    AgentStatus.ERROR,
+                    'Could not parse goal details. Use format: title="Your Goal", weekly target=5 hours',
                     data={"message": message},
                 )
 
@@ -1966,23 +1964,21 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
         raw = await tool_get_learning_status(user_id)
         data = _safe_json_loads(raw, fallback={})
         resources = data.get("resources", [])
-        titles = ", ".join(r["title"] for r in resources) if resources else "none"
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.OK,
-            summary=f"Currently studying: {titles}.",
-            conflicts=[],
+        titles = (
+            ", ".join(
+                str(r.get("title", "unknown")) if isinstance(r, dict) else str(r)
+                for r in resources
+            )
+            if resources
+            else "none"
+        )
+        return _build_agent_response(
+            AgentStatus.OK,
+            f"Currently studying: {titles}.",
             actions_taken=["tool_get_learning_status"],
             data=data,
         )
 
     except Exception as exc:
-        logger.error("Direct dispatch failed: %s", exc)
-        return AgentResponse(
-            agent="learning_agent",
-            status=AgentStatus.ERROR,
-            summary=f"Agent error: {exc}",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
-        )
+        logger.exception("Direct dispatch failed user_id=%s", user_id)
+        return _build_agent_response(AgentStatus.ERROR, f"Agent error: {exc}")

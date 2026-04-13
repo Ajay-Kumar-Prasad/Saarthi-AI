@@ -1,8 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from agents.health_agent import run_health_agent, sync_all_health_data
 from db.health_db import build_health_summary
-from db.schemas import AgentResponse
+from db.schemas import AgentResponse, AgentStatus
 from routers.dependencies import ensure_agent_success
 from routers.schemas import ChatRequest, StatusRequest, SyncRequest
 
@@ -12,26 +12,61 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 @router.post("/chat", response_model=AgentResponse)
 async def health_chat(req: ChatRequest):
-    return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    try:
+        return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Health chat failed: {exc}") from exc
 
 
-@router.post("/status")
+@router.post("/status", response_model=AgentResponse)
 async def health_status(req: StatusRequest):
-    summary = await build_health_summary(req.user_id, days=req.days)
-    return summary.model_dump()
+    try:
+        summary = await build_health_summary(req.user_id, days=req.days)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch health status: {exc}") from exc
+    return AgentResponse(
+        agent="health_agent",
+        status=AgentStatus.OK,
+        summary=f"Health summary generated for last {req.days} day(s).",
+        conflicts=[],
+        actions_taken=["build_health_summary"],
+        data=summary.model_dump(),
+    )
 
 
-@router.post("/sync")
+@router.post("/sync", response_model=AgentResponse)
 async def health_sync(req: SyncRequest):
-    result = await sync_all_health_data(req.user_id, req.days)
-    return {"status": "ok", "synced": result}
+    try:
+        result = await sync_all_health_data(req.user_id, req.days)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to sync health data: {exc}") from exc
+    return AgentResponse(
+        agent="health_agent",
+        status=AgentStatus.OK,
+        summary=f"Health sync completed for {req.days} day(s).",
+        conflicts=[],
+        actions_taken=["sync_all_health_data"],
+        data={"synced": result},
+    )
 
 
 @router.post("/trends", response_model=AgentResponse)
 async def health_trends(req: ChatRequest):
-    return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    try:
+        return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Health trends failed: {exc}") from exc
 
 
 @router.post("/query", response_model=AgentResponse)
 async def health_query(req: ChatRequest):
-    return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    try:
+        return ensure_agent_success(await run_health_agent(req.message, req.user_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Health query failed: {exc}") from exc

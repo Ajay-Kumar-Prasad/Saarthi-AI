@@ -5,7 +5,6 @@ import { api } from "@/lib/api"
 type Tab = "review" | "create"
 type Card = { question: string; answer: string; id?: string }
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
 function toUUID(id: string): string {
   // If already UUID, return as is
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -16,16 +15,9 @@ function toUUID(id: string): string {
   return `00000000-0000-0000-0000-${padded}`
 }
 async function createFlashcard(question: string, answer: string, resourceId: string) {
-  const res = await fetch("/api/learning/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: USER_ID,
-      message: `Create a flashcard: question="${question}", answer="${answer}", resource_id=${resourceId}`,
-    }),
-  })
-  if (!res.ok) throw new Error("Failed")
-  return res.json()
+  return api.learning.chat(
+    `Create a flashcard: question="${question}", answer="${answer}", resource_id=${resourceId}`,
+  )
 }
 
 // ── Review tab ────────────────────────────────────────────────────────────────

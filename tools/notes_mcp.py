@@ -17,12 +17,14 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "/home/ajayk10440/Saarthi-AI/token.json")
-DOCS_INDEX_FILE = "/home/ajayk10440/Saarthi-AI/docs_index.json"
+TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "").strip()
+DOCS_INDEX_FILE = os.getenv("GOOGLE_DOCS_INDEX_PATH", "docs_index.json")
 
 
 def _get_credentials():
     """Load and refresh OAuth credentials."""
+    if not TOKEN_PATH:
+        raise RuntimeError("GOOGLE_TOKEN_PATH is required for notes integration.")
     with open(TOKEN_PATH) as f:
         data = json.load(f)
 

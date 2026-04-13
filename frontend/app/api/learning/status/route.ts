@@ -1,10 +1,7 @@
-import { NextRequest, NextResponse } from "next/server"
-const API = process.env.API_URL ?? "http://localhost:8080"
+import { NextRequest } from "next/server";
+import { proxyPost } from "@/app/api/_lib/proxy";
+
 export async function POST(req: NextRequest) {
-  const body = await req.json()
-  const res = await fetch(`${API}/learning/status`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  return NextResponse.json(await res.json())
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  return proxyPost("/learning/status", body, "learning_agent");
 }

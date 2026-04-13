@@ -24,8 +24,9 @@ from fastapi.responses import RedirectResponse
 
 from db.alloydb import get_connection
 
-# Load .env from the project root so os.getenv finds configured values
-load_dotenv()
+# Load .env only in local/development mode.
+if os.getenv("APP_ENV", "development").lower() != "production":
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.getenv(
-    "GOOGLE_REDIRECT_URI", "http://localhost:8081/auth/google/callback"
-)
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -64,6 +63,16 @@ async def google_login(user_id: str = Query(..., description="The user's unique 
         raise HTTPException(
             status_code=500,
             detail="GOOGLE_CLIENT_ID is not configured. Set it in your .env file.",
+        )
+    if not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_CLIENT_SECRET is not configured.",
+        )
+    if not GOOGLE_REDIRECT_URI:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_REDIRECT_URI is not configured.",
         )
 
     scope_str = " ".join(SCOPES)

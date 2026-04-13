@@ -10,37 +10,24 @@ import LearningPath from "@/components/learning/LearningPath"
 import ChatBox from "@/components/learning/ChatBox"
 import StudyGoals from "@/components/learning/StudyGoals"
 import StudyNotes from "@/components/learning/StudyNotes"
-import type { LearningStatus } from "@/lib/api"
+import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
+import { fetchLearningStatus, LearningStatus } from "@/lib/api"
+import { AgentResponse } from "@/types/agent"
 
 const USER_ID = "00000000-0000-0000-0000-000000000001"
 
 export default function LearningPage() {
   const [status, setStatus] = useState<LearningStatus | null>(null)
+  const [agentResponse, setAgentResponse] = useState<AgentResponse | null>(null)
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(true)
 
   async function fetchStatus() {
     try {
-      const res = await fetch("/api/learning/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: USER_ID }),
-      })
-      if (!res.ok) { setError(true); return }
-      const raw = await res.json()
-
-      // Normalise: the API may return the payload nested under `data`,
-      // or it may be flat. Either way we guarantee arrays are never undefined.
-      const payload = raw?.data ?? raw
-      const normalised: LearningStatus = {
-        resources:         Array.isArray(payload?.resources)         ? payload.resources         : [],
-        upcoming_sessions: Array.isArray(payload?.upcoming_sessions) ? payload.upcoming_sessions : [],
-        active_goals:      Array.isArray(payload?.active_goals)      ? payload.active_goals      : [],
-        weekly_hours_studied: payload?.weekly_hours_studied ?? 0,
-        streak_days:          payload?.streak_days          ?? 0,
-      }
-      setStatus(normalised)
-      setError(false)
+      const response = await fetchLearningStatus(USER_ID)
+      setAgentResponse(response)
+      setStatus(response.data)
+      setError(response.status === "error")
     } catch {
       setError(true)
     } finally {
@@ -75,6 +62,7 @@ export default function LearningPage() {
         )}
 
         {status && <StatusCards data={status} />}
+        {agentResponse && <AgentResponsePanel title="Learning Agent" response={agentResponse} />}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">

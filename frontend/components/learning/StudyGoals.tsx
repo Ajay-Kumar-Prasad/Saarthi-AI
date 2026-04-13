@@ -1,6 +1,6 @@
 "use client"
 import { useState, useEffect } from "react"
-import type { Goal } from "@/lib/api"
+import { api, fetchLearningStatus, Goal } from "@/lib/api"
 
 const USER_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -9,27 +9,14 @@ async function createGoalOnBackend(data: {
   weekly_hours_target: number
   target_date?: string
 }) {
-  const res = await fetch("/api/learning/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: USER_ID,
-      message: `Create a study goal: title="${data.title}", weekly target=${data.weekly_hours_target} hours${data.target_date ? `, target date=${data.target_date}` : ""}`,
-    }),
-  })
-  if (!res.ok) throw new Error("Failed to create goal")
-  return res.json()
+  return api.learning.chat(
+    `Create a study goal: title="${data.title}", weekly target=${data.weekly_hours_target} hours${data.target_date ? `, target date=${data.target_date}` : ""}`,
+  )
 }
 
 async function fetchGoals(): Promise<Goal[]> {
-  const res = await fetch("/api/learning/status", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: USER_ID }),
-  })
-  if (!res.ok) return []
-  const data = await res.json()
-  return Array.isArray(data?.active_goals) ? data.active_goals : []
+  const response = await fetchLearningStatus(USER_ID)
+  return response.data?.active_goals ?? []
 }
 
 const STATUS_STYLES: Record<string, string> = {

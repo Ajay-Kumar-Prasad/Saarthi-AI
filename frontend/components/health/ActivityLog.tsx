@@ -49,8 +49,8 @@ export default function ActivityLog({ sessions }: { sessions: ActivitySession[] 
                 </div>
               </div>
               <div className="text-right">
-                {s.calories != null && (
-                  <p className="text-emerald-400 text-sm font-medium">{s.calories} kcal</p>
+                {s.calories_burned != null && (
+                  <p className="text-emerald-400 text-sm font-medium">{s.calories_burned} kcal</p>
                 )}
                 {s.avg_heart_rate != null && (
                   <p className="text-gray-500 text-xs">{s.avg_heart_rate} bpm avg</p>

@@ -1,21 +1,17 @@
-import { NextRequest, NextResponse } from "next/server"
-
-const API = process.env.API_URL ?? "http://localhost:8080"
+import { NextRequest } from "next/server"
+import { proxyPost } from "@/app/api/_lib/proxy"
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+  const note = typeof body.note === "string" ? body.note : ""
+  const resource = typeof body.resource === "string" ? body.resource : ""
 
   // If note content is provided — it's a SAVE request
-  const message = body.note
-    ? `save this note for ${body.resource}: ${body.note}`
-    : body.resource
-    ? `show notes for ${body.resource}`
+  const message = note
+    ? `save this note for ${resource}: ${note}`
+    : resource
+    ? `show notes for ${resource}`
     : "show my notes"
 
-  const res = await fetch(`${API}/learning/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...body, message }),
-  })
-  return NextResponse.json(await res.json())
+  return proxyPost("/learning/chat", { ...body, message }, "learning_agent")
 }

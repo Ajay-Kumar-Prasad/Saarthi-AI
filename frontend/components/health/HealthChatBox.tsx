@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { postAgent } from "@/lib/api"
 
 interface Message {
   role: "user" | "agent"
@@ -26,18 +27,8 @@ export default function HealthChatBox() {
     setLoading(true)
 
     try {
-      const API = process.env.API_URL || "http://localhost:8080"
-      const res = await fetch(`${API}/health/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text.trim(),
-          user_id: "chjoshna145@gmail.com",
-        }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setMessages((prev) => [...prev, { role: "agent", text: data.summary ?? "No response from agent." }])
+      const response = await postAgent("/api/health/chat", { message: text.trim() })
+      setMessages((prev) => [...prev, { role: "agent", text: response.summary ?? "No response from agent." }])
     } catch {
       setMessages((prev) => [...prev, { role: "agent", text: "Unable to fetch data. Please try again." }])
     } finally {

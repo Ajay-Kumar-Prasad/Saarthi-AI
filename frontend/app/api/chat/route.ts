@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server"
+import { fallbackAgentResponse, isAgentResponse } from "@/types/agent"
 
-const API = process.env.API_URL ?? "http://localhost:8080"
+const API = process.env.BACKEND_URL ?? process.env.API_URL ?? "http://localhost:8080"
 
 type ChatRequestBody = {
   prompt?: string
@@ -41,7 +42,7 @@ function toTokenStream(text: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = (await req.json()) as ChatRequestBody
+  const body = (await req.json().catch(() => ({}))) as ChatRequestBody
   const prompt = getLatestUserPrompt(body)
   const activeAgents = body.activeAgents ?? body.active_agents ?? []
   const domains = activeAgents.map((agent) => agent.toLowerCase())
@@ -55,29 +56,36 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  const response = await fetch(`${API}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: body.user_id ?? "00000000-0000-0000-0000-000000000001",
-      message: prompt,
-      domains,
-    }),
-  })
+  try {
+    const response = await fetch(`${API}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: body.user_id ?? "00000000-0000-0000-0000-000000000001",
+        message: prompt,
+        domains,
+      }),
+    })
 
-  if (!response.ok) {
-    return new Response("Streaming request failed", { status: response.status })
+    if (!response.ok) {
+      return new Response("Streaming request failed", { status: response.status })
+    }
+
+    const payload = (await response.json()) as unknown
+    const safePayload = isAgentResponse(payload)
+      ? payload
+      : fallbackAgentResponse("orchestrator", "Backend returned invalid response format.")
+    const assistantText = String(safePayload.summary ?? "Done.")
+
+    return new Response(toTokenStream(assistantText), {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Saarthi-Agents": JSON.stringify(activeAgents.length > 0 ? activeAgents : ["learning"]),
+      },
+    })
+  } catch {
+    return new Response("Streaming request failed", { status: 502 })
   }
-
-  const payload = await response.json()
-  const assistantText = String(payload?.summary ?? payload?.message ?? "Done.")
-
-  return new Response(toTokenStream(assistantText), {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Saarthi-Agents": JSON.stringify(activeAgents.length > 0 ? activeAgents : ["learning"]),
-    },
-  })
 }

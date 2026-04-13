@@ -4,6 +4,7 @@ import { FormEvent, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import ChatFeed, { type Message } from "@/components/chat/ChatFeed"
 import MorningBriefing from "@/components/dashboard/MorningBriefing"
+import { getAgent } from "@/lib/api"
 
 type StreamingChatPanelProps = {
   activeAgent?: string
@@ -18,7 +19,6 @@ function resolveAgents(activeAgent?: string): string[] {
 }
 
 export default function StreamingChatPanel({ activeAgent }: StreamingChatPanelProps) {
-  console.log("STREAMING CHAT PANEL LOADED")
   const [input, setInput] = useState("")
   const [streamingAgents, setStreamingAgents] = useState<string[]>([])
   const queryClient = useQueryClient()
@@ -28,10 +28,9 @@ export default function StreamingChatPanel({ activeAgent }: StreamingChatPanelPr
   const { data: messages = [] } = useQuery<Message[]>({
     queryKey: ["messages"],
     queryFn: async () => {
-      const res = await fetch("/api/chat/history")
-      if (!res.ok) return []
-      const data = await res.json()
-      return Array.isArray(data?.messages) ? (data.messages as Message[]) : []
+      const response = await getAgent("/api/chat/history")
+      const payload = response.data as Record<string, unknown> | null
+      return Array.isArray(payload?.messages) ? (payload.messages as Message[]) : []
     },
     initialData: [
       {

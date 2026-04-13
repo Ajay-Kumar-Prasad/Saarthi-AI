@@ -2,7 +2,6 @@
 import { useState } from "react"
 import { api } from "@/lib/api"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
 
 type Step = {
   id?: string
@@ -32,16 +31,7 @@ const STATUS_ICON: Record<string, string> = {
 }
 
 async function updateStep(pathId: string, stepId: string, status: string) {
-  const res = await fetch("/api/learning/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: USER_ID,
-      message: `Update learning path step: path_id=${pathId}, step_id=${stepId}, status=${status}`,
-    }),
-  })
-  if (!res.ok) throw new Error("Failed")
-  return res.json()
+  return api.learning.chat(`Update learning path step: path_id=${pathId}, step_id=${stepId}, status=${status}`)
 }
 
 export default function LearningPath() {

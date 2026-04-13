@@ -17,12 +17,15 @@ interface Props {
   metrics: DailyMetric[]
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+type TooltipPayloadItem = { dataKey?: string; color?: string; name?: string; value?: number }
+type TooltipProps = { active?: boolean; payload?: TooltipPayloadItem[]; label?: string }
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs">
       <p className="text-gray-400 mb-1">{label}</p>
-      {payload.map((p: any) => (
+      {payload.map((p) => (
         <p key={p.dataKey} style={{ color: p.color }}>
           {p.name}: <span className="text-white font-medium">{p.value?.toLocaleString()}</span>
         </p>

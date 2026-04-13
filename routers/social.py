@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from agents.social_agent import run_social_agent
 from db.schemas import AgentResponse
@@ -11,4 +11,9 @@ router = APIRouter(prefix="/social", tags=["social"])
 
 @router.post("/chat", response_model=AgentResponse)
 async def social_chat(req: ChatRequest):
-    return ensure_agent_success(await run_social_agent(req.message, req.user_id))
+    try:
+        return ensure_agent_success(await run_social_agent(req.message, req.user_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Social endpoint failed: {exc}") from exc

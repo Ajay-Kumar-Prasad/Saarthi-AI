@@ -12,7 +12,10 @@ import {
 import type { DailyMetric } from "@/lib/health-api"
 import { format, parseISO } from "date-fns"
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+type TooltipPayloadItem = { value?: number }
+type TooltipProps = { active?: boolean; payload?: TooltipPayloadItem[]; label?: string }
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs">

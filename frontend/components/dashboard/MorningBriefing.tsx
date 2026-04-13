@@ -2,12 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { motion } from "framer-motion"
-
-type MorningBriefingResponse = {
-  name?: string
-  chaos_score?: number
-  recommendations?: string[]
-}
+import { getAgent } from "@/lib/api"
+import { AgentResponse } from "@/types/agent"
 
 const DEFAULT_RECOMMENDATIONS = [
   "Start with your top-priority work block before checking notifications.",
@@ -16,7 +12,7 @@ const DEFAULT_RECOMMENDATIONS = [
 ]
 
 export default function MorningBriefing() {
-  const [briefing, setBriefing] = useState<MorningBriefingResponse | null>(null)
+  const [briefing, setBriefing] = useState<AgentResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isVisible, setIsVisible] = useState(false)
 
@@ -35,26 +31,24 @@ export default function MorningBriefing() {
     }
 
     async function loadBriefing() {
-      try {
-        const res = await fetch("/api/morning-briefing", { method: "GET" })
-        if (!res.ok) throw new Error("Failed to fetch morning briefing")
-        const data = (await res.json()) as MorningBriefingResponse
-        setBriefing(data)
-      } catch {
-        setBriefing(null)
-      } finally {
-        setIsLoading(false)
-      }
+      const data = await getAgent("/api/morning-briefing")
+      setBriefing(data as AgentResponse)
+      setIsLoading(false)
     }
 
     loadBriefing()
   }, [isVisible])
 
-  const name = briefing?.name?.trim() || "Ajay"
-  const chaosScore = Math.min(10, Math.max(1, Math.round(briefing?.chaos_score ?? 6)))
+  const name = "Ajay"
+  const chaosScore = briefing?.status === "error" ? 8 : 5
   const recommendations = useMemo(
-    () => (briefing?.recommendations?.slice(0, 3) ?? DEFAULT_RECOMMENDATIONS).slice(0, 3),
-    [briefing?.recommendations]
+    () => {
+      const items = [briefing?.summary, ...(briefing?.actions_taken ?? [])]
+        .filter((item): item is string => Boolean(item && item.trim()))
+        .slice(0, 3)
+      return items.length > 0 ? items : DEFAULT_RECOMMENDATIONS
+    },
+    [briefing]
   )
 
   if (!isVisible) return null

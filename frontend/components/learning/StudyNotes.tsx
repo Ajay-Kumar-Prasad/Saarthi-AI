@@ -40,8 +40,6 @@ export default function StudyNotes({ resources }: { resources: Resource[] }) {
     const resource = selectedResource === "all"
       ? (resources[0]?.title ?? "General")
       : selectedResource
-    console.log("SAVING NOTE — resource:", resource, "text:", noteText.trim()) // ← add
-    console.log("API call:", `Save this note for ${resource}: ${noteText.trim()}`) // ← add
     setSaving(true)
     setError(null)
     setSaveMsg(null)

@@ -26,7 +26,7 @@ def _parse_csv_env(name: str, fallback: list[str]) -> list[str]:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings(
+    settings = Settings(
         app_name=os.getenv("APP_NAME", "Saarthi AI"),
         app_description=os.getenv(
             "APP_DESCRIPTION",
@@ -42,3 +42,13 @@ def get_settings() -> Settings:
         cors_allow_methods=_parse_csv_env("CORS_ALLOW_METHODS", ["*"]),
         cors_allow_headers=_parse_csv_env("CORS_ALLOW_HEADERS", ["*"]),
     )
+    if settings.app_env.lower() == "production" and (
+        "*" in settings.cors_allow_origins
+        or "*" in settings.cors_allow_methods
+        or "*" in settings.cors_allow_headers
+    ):
+        raise ValueError(
+            "Wildcard CORS values are not allowed in production. "
+            "Set explicit CORS_ALLOW_ORIGINS/CORS_ALLOW_METHODS/CORS_ALLOW_HEADERS."
+        )
+    return settings

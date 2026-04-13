@@ -83,6 +83,79 @@ logger = logging.getLogger(__name__)
 
 # ── Internal sync helper (called during onboarding, not by the agent directly) ─
 
+def _error_response(summary: str, data: dict | None = None) -> AgentResponse:
+    return AgentResponse(
+        agent="health_agent",
+        status=AgentStatus.ERROR,
+        summary=summary,
+        conflicts=[],
+        actions_taken=[],
+        data=data,
+    )
+
+
+def _is_valid_user_id(user_id: str) -> bool:
+    return isinstance(user_id, str) and bool(user_id.strip())
+
+
+def _sanitize_days(days: int, default: int = 7, max_days: int = 30) -> int:
+    if not isinstance(days, int):
+        return default
+    if days < 1:
+        return 1
+    return min(days, max_days)
+
+
+def _json_error(message: str, **extra) -> str:
+    payload = {"error": message}
+    payload.update(extra)
+    return json.dumps(payload, default=str)
+
+
+async def _safe_fetch_health_data(user_id: str, days: int) -> tuple[list, list, list, list[str]]:
+    issues: list[str] = []
+    sleep_sessions, activity_sessions, daily_metrics = [], [], []
+    try:
+        sleep_sessions = await fetch_sleep_data(user_id, days)
+    except Exception as exc:
+        logger.exception("Failed to fetch sleep data for user_id=%s", user_id)
+        issues.append(f"sleep_fetch_failed: {exc}")
+    try:
+        activity_sessions = await fetch_activity_sessions(user_id, days)
+    except Exception as exc:
+        logger.exception("Failed to fetch activity data for user_id=%s", user_id)
+        issues.append(f"activity_fetch_failed: {exc}")
+    try:
+        daily_metrics = await fetch_daily_metrics(user_id, days)
+    except Exception as exc:
+        logger.exception("Failed to fetch daily metrics for user_id=%s", user_id)
+        issues.append(f"metrics_fetch_failed: {exc}")
+    return sleep_sessions, activity_sessions, daily_metrics, issues
+
+
+async def _safe_persist_health_data(
+    user_id: str, sleep_sessions: list, activity_sessions: list, daily_metrics: list
+) -> tuple[int, int, int, list[str]]:
+    issues: list[str] = []
+    sleep_saved = activity_saved = metrics_saved = 0
+    try:
+        sleep_saved = await save_sleep_sessions(user_id, sleep_sessions)
+    except Exception as exc:
+        logger.exception("Failed to persist sleep data for user_id=%s", user_id)
+        issues.append(f"sleep_save_failed: {exc}")
+    try:
+        activity_saved = await save_activity_sessions(user_id, activity_sessions)
+    except Exception as exc:
+        logger.exception("Failed to persist activity data for user_id=%s", user_id)
+        issues.append(f"activity_save_failed: {exc}")
+    try:
+        metrics_saved = await save_daily_metrics(user_id, daily_metrics)
+    except Exception as exc:
+        logger.exception("Failed to persist daily metrics for user_id=%s", user_id)
+        issues.append(f"metrics_save_failed: {exc}")
+    return sleep_saved, activity_saved, metrics_saved, issues
+
+
 async def sync_all_health_data(user_id: str, days: int = 30) -> dict:
     """
     Pull all health data from Google Fit and persist to AlloyDB.
@@ -96,14 +169,17 @@ async def sync_all_health_data(user_id: str, days: int = 30) -> dict:
     Returns:
         Dict with counts of records saved per category.
     """
-    days = min(days, 30)
+    if not _is_valid_user_id(user_id):
+        return {"error": "user_id is required for health sync."}
 
-    sleep_sessions = await fetch_sleep_data(user_id, days)
-    activity_sessions = await fetch_activity_sessions(user_id, days)
-    daily_metrics = await fetch_daily_metrics(user_id, days)
-    sleep_saved = await save_sleep_sessions(user_id, sleep_sessions)
-    activity_saved = await save_activity_sessions(user_id, activity_sessions)
-    metrics_saved = await save_daily_metrics(user_id, daily_metrics)
+    days = _sanitize_days(days, default=30, max_days=30)
+    sleep_sessions, activity_sessions, daily_metrics, fetch_issues = await _safe_fetch_health_data(
+        user_id, days
+    )
+    sleep_saved, activity_saved, metrics_saved, persist_issues = await _safe_persist_health_data(
+        user_id, sleep_sessions, activity_sessions, daily_metrics
+    )
+    issues = fetch_issues + persist_issues
 
     logger.info(
         f"[sync_all_health_data] user={user_id} "
@@ -115,6 +191,7 @@ async def sync_all_health_data(user_id: str, days: int = 30) -> dict:
         "activity_sessions_saved": activity_saved,
         "daily_metrics_saved": metrics_saved,
         "period_days": days,
+        "issues": issues,
     }
 
 
@@ -153,13 +230,19 @@ async def tool_get_sleep_from_db(user_id: str, days: int = 7) -> str:
     Returns:
         JSON string with keys: sessions, count, period_days.
     """
-    days = min(days, 30)
-    sessions = await get_sleep_summary_from_db(user_id, days)
-    return json.dumps({
-        "sessions": [s.model_dump() for s in sessions],
-        "count": len(sessions),
-        "period_days": days,
-    }, default=str)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=7, max_days=30)
+    try:
+        sessions = await get_sleep_summary_from_db(user_id, days)
+        return json.dumps({
+            "sessions": [s.model_dump() for s in sessions],
+            "count": len(sessions),
+            "period_days": days,
+        }, default=str)
+    except Exception as exc:
+        logger.exception("tool_get_sleep_from_db failed user_id=%s", user_id)
+        return _json_error("Failed to fetch sleep data.", details=str(exc))
 
 
 async def tool_get_activity_from_db(user_id: str, days: int = 7) -> str:
@@ -177,13 +260,19 @@ async def tool_get_activity_from_db(user_id: str, days: int = 7) -> str:
     Returns:
         JSON string with keys: sessions, count, period_days.
     """
-    days = min(days, 30)
-    sessions = await get_activity_summary_from_db(user_id, days)
-    return json.dumps({
-        "sessions": [s.model_dump() for s in sessions],
-        "count": len(sessions),
-        "period_days": days,
-    }, default=str)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=7, max_days=30)
+    try:
+        sessions = await get_activity_summary_from_db(user_id, days)
+        return json.dumps({
+            "sessions": [s.model_dump() for s in sessions],
+            "count": len(sessions),
+            "period_days": days,
+        }, default=str)
+    except Exception as exc:
+        logger.exception("tool_get_activity_from_db failed user_id=%s", user_id)
+        return _json_error("Failed to fetch activity data.", details=str(exc))
 
 
 async def tool_get_daily_metrics_from_db(user_id: str, days: int = 7) -> str:
@@ -200,13 +289,19 @@ async def tool_get_daily_metrics_from_db(user_id: str, days: int = 7) -> str:
     Returns:
         JSON string with keys: daily_metrics, count, period_days.
     """
-    days = min(days, 30)
-    metrics = await get_daily_metrics_from_db(user_id, days)
-    return json.dumps({
-        "daily_metrics": [m.model_dump() for m in metrics],
-        "count": len(metrics),
-        "period_days": days,
-    }, default=str)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=7, max_days=30)
+    try:
+        metrics = await get_daily_metrics_from_db(user_id, days)
+        return json.dumps({
+            "daily_metrics": [m.model_dump() for m in metrics],
+            "count": len(metrics),
+            "period_days": days,
+        }, default=str)
+    except Exception as exc:
+        logger.exception("tool_get_daily_metrics_from_db failed user_id=%s", user_id)
+        return _json_error("Failed to fetch daily metrics.", details=str(exc))
 
 
 async def tool_get_health_summary(user_id: str, days: int = 7) -> str:
@@ -223,8 +318,15 @@ async def tool_get_health_summary(user_id: str, days: int = 7) -> str:
     Returns:
         JSON string with the full HealthSummary object.
     """
-    summary = await build_health_summary(user_id, days)
-    return json.dumps(summary.model_dump(), default=str)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=7, max_days=30)
+    try:
+        summary = await build_health_summary(user_id, days)
+        return json.dumps(summary.model_dump(), default=str)
+    except Exception as exc:
+        logger.exception("tool_get_health_summary failed user_id=%s", user_id)
+        return _json_error("Failed to build health summary.", details=str(exc))
 
 
 async def tool_analyze_health_trends(user_id: str, days: int = 14) -> str:
@@ -242,7 +344,14 @@ async def tool_analyze_health_trends(user_id: str, days: int = 14) -> str:
     Returns:
         JSON string with keys: insights, conflicts, confidence, period_days, summary.
     """
-    summary = await build_health_summary(user_id, days)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=14, max_days=30)
+    try:
+        summary = await build_health_summary(user_id, days)
+    except Exception as exc:
+        logger.exception("tool_analyze_health_trends failed user_id=%s", user_id)
+        return _json_error("Failed to analyze health trends.", details=str(exc))
     insights = []
     conflicts = []
 
@@ -334,6 +443,9 @@ async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
     Returns:
         JSON string with counts of records synced per category.
     """
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    days = _sanitize_days(days, default=30, max_days=30)
     result = await sync_all_health_data(user_id, days)
     logger.info(f"[tool_sync_health_data] manual sync triggered for user {user_id}")
     return json.dumps(result, default=str)
@@ -352,9 +464,15 @@ async def tool_get_agent_status(user_id: str) -> str:
     Returns:
         JSON string matching the AgentResponse schema.
     """
-    summary = await build_health_summary(user_id, days=7)
-    trend_raw = await tool_analyze_health_trends(user_id, days=14)
-    trend_data = json.loads(trend_raw)
+    if not _is_valid_user_id(user_id):
+        return _json_error("user_id is required.")
+    try:
+        summary = await build_health_summary(user_id, days=7)
+        trend_raw = await tool_analyze_health_trends(user_id, days=14)
+        trend_data = json.loads(trend_raw)
+    except Exception as exc:
+        logger.exception("tool_get_agent_status failed user_id=%s", user_id)
+        return _json_error("Failed to build agent status.", details=str(exc))
 
     parts = []
     if summary.avg_sleep_minutes:
@@ -480,34 +598,30 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
         session_service.create_session(app_name=..., user_id=...)
         runner.run_async(user_id=..., session_id=..., new_message=types.Content(...))
     """
-    if not user_id:
-        return AgentResponse(
-            agent="health_agent",
-            status=AgentStatus.ERROR,
-            summary="Missing required user_id.",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
-        )
+    if not _is_valid_user_id(user_id):
+        return _error_response("Missing required user_id.")
+    if not isinstance(message, str) or not message.strip():
+        return _error_response("Missing required message.")
+    if not _ADK_AVAILABLE:
+        return _error_response("google-adk dependency is not available.")
 
     APP_NAME = "health_agent"
 
-    session_service = InMemorySessionService()
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id=user_id,
-    )
-
-    runner = Runner(
-        agent=health_agent,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
-
     try:
+        session_service = InMemorySessionService()
+        session = await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+        )
+
+        runner = Runner(
+            agent=health_agent,
+            app_name=APP_NAME,
+            session_service=session_service,
+        )
         # Prepend user_id so Gemini always knows which user to pass to tool functions.
         # Without this, Gemini guesses or passes an empty string → DB returns 0 rows.
-        injected_message = f"[user_id: {user_id}]\n\n{message}"
+        injected_message = f"[user_id: {user_id}]\n\n{message.strip()}"
 
         new_message = genai_types.Content(
             role="user",
@@ -554,12 +668,5 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
             )
 
     except Exception as exc:
-        logger.error("Health agent error: %s", exc)
-        return AgentResponse(
-            agent="health_agent",
-            status=AgentStatus.ERROR,
-            summary=f"Health agent encountered an error: {exc}",
-            conflicts=[],
-            actions_taken=[],
-            data=None,
-        )
+        logger.exception("Health agent error")
+        return _error_response(f"Health agent encountered an error: {exc}")

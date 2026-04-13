@@ -65,7 +65,9 @@ def _get_calendar_service():
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
-    token_path = os.getenv("GOOGLE_TOKEN_PATH", "/home/ajayk10440/Saarthi-AI/token.json")
+    token_path = os.getenv("GOOGLE_TOKEN_PATH", "").strip()
+    if not token_path:
+        raise RuntimeError("GOOGLE_TOKEN_PATH is required for real calendar access.")
     with open(token_path) as f:
         data = json.load(f)
 
@@ -104,7 +106,10 @@ def _resolve_calendar_scope(user_id: str) -> tuple[str, bool]:
         except Exception as exc:
             logger.warning("Invalid SAARTHI_USER_CALENDAR_MAP; falling back to shared calendar: %s", exc)
 
-    return os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com"), False
+    calendar_id = os.getenv("SAARTHI_CALENDAR_ID", "").strip()
+    if not calendar_id:
+        raise RuntimeError("SAARTHI_CALENDAR_ID is required when user map is not configured.")
+    return calendar_id, False
 
 
 async def create_study_calendar_event(
