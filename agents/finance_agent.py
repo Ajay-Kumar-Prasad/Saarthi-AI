@@ -3,11 +3,17 @@ import os
 import re
 import json
 import threading
+import logging
 from datetime import datetime
 
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except Exception:  # pragma: no cover
+    genai = None
 from db.finance_db import insert_expense, get_all_expenses
 from db.schemas import AgentResponse, AgentStatus
+
+logger = logging.getLogger(__name__)
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
@@ -30,11 +36,11 @@ def _save_expense(amount, category, description="", user_id=None):
     try:
         insert_expense(amount, category, description, now, user_id)
     except Exception as e:
-        print(f"DB write failed: {e}")
+        logger.exception("DB write failed in finance tool")
     try:
         _get_sheet().append_row([str(now), amount, category, description])
     except Exception as e:
-        print(f"Sheets write failed: {e}")
+        logger.warning("Sheets write failed: %s", e)
     return f"✅ Saved ₹{amount} for {category}"
 
 
@@ -72,7 +78,7 @@ def sync_gmail_expenses():
             from tools.gmail_mcp import read_messages_and_save
             read_messages_and_save(_get_sheet())
         except Exception as e:
-            print(f"Gmail sync error: {e}")
+            logger.exception("Gmail sync error")
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -100,6 +106,15 @@ User: {user_msg}
 # ── Orchestrator entry point ───────────────────────────────────────────────────
 async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
     try:
+        if genai is None:
+            return AgentResponse(
+                agent="finance_agent",
+                status=AgentStatus.ERROR,
+                summary="google-generativeai dependency is missing. Install required dependencies.",
+                conflicts=[],
+                actions_taken=[],
+                data=None,
+            )
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
         model = genai.GenerativeModel("gemini-2.5-flash")
 
@@ -158,7 +173,17 @@ async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
             data={"tool": tool_name, "args": action.get("args", {})},
         )
 
+    except KeyError:
+        return AgentResponse(
+            agent="finance_agent",
+            status=AgentStatus.ERROR,
+            summary="GEMINI_API_KEY is not configured.",
+            conflicts=[],
+            actions_taken=[],
+            data=None,
+        )
     except Exception as e:
+        logger.exception("Finance agent failed")
         return AgentResponse(
             agent="finance_agent",
             status=AgentStatus.ERROR,
