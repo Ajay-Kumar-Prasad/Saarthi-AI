@@ -3,6 +3,16 @@ substitutions:
   _REPOSITORY: saarthi
   _SERVICE_NAME: saarthi-api
   _SERVICE_ACCOUNT: saarthi-runner@${PROJECT_ID}.iam.gserviceaccount.com
+  _ALLOYDB_INSTANCE_URI: projects/${PROJECT_ID}/locations/us-central1/clusters/saarthi-cluster/instances/saarthi-primary
+  _ALLOYDB_DB: saarthi
+  _ALLOYDB_IAM_USER: saarthi-runner@${PROJECT_ID}.iam.gserviceaccount.com
+  _CORS_ALLOW_ORIGINS: https://saarthi-ai.vercel.app
+  _CORS_ALLOW_METHODS: GET,POST,PUT,PATCH,DELETE,OPTIONS
+  _CORS_ALLOW_HEADERS: Authorization,Content-Type
+  _SECRET_DB_PASS: DB_PASS
+  _SECRET_GEMINI_API_KEY: GEMINI_API_KEY
+  _SECRET_GOOGLE_CLIENT_SECRET: GOOGLE_CLIENT_SECRET
+  _SECRET_MCP_AUTH_TOKEN: MCP_AUTH_TOKEN
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -31,7 +41,8 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --service-account=${_SERVICE_ACCOUNT}
-      - --set-env-vars=APP_ENV=production
+      - --set-env-vars=APP_ENV=production,APP_LOG_LEVEL=INFO,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},ALLOYDB_INSTANCE_URI=${_ALLOYDB_INSTANCE_URI},ALLOYDB_DB=${_ALLOYDB_DB},ALLOYDB_IAM_USER=${_ALLOYDB_IAM_USER},MOCK_DB=false,MOCK_MCP=true,MOCK_WORKSPACE_MCP=true,EMBEDDING_MODEL=text-embedding-004,CORS_ALLOW_ORIGINS=${_CORS_ALLOW_ORIGINS},CORS_ALLOW_METHODS=${_CORS_ALLOW_METHODS},CORS_ALLOW_HEADERS=${_CORS_ALLOW_HEADERS}
+      - --set-secrets=DB_PASS=${_SECRET_DB_PASS}:latest,GEMINI_API_KEY=${_SECRET_GEMINI_API_KEY}:latest,GOOGLE_CLIENT_SECRET=${_SECRET_GOOGLE_CLIENT_SECRET}:latest,MCP_AUTH_TOKEN=${_SECRET_MCP_AUTH_TOKEN}:latest
 
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}

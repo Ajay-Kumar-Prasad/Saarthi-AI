@@ -27,6 +27,22 @@ MOCK_DB = os.getenv("MOCK_DB", "false").lower() == "true"
 
 async def get_all_resources(user_id: str, status: str | None = None) -> list[dict]:
     """Fetch all learning resources for a user, optionally filtered by status."""
+    if MOCK_DB:
+        resources = [
+            {
+                "id": "resource-001",
+                "user_id": user_id,
+                "title": "Python for Data Engineering",
+                "resource_type": "course",
+                "author": "Saarthi",
+                "status": "in_progress",
+                "progress_pct": 35,
+                "tags": ["python", "data-engineering"],
+            }
+        ]
+        if status:
+            return [r for r in resources if r.get("status") == status]
+        return resources
     conn = await get_connection()
     try:
         if status:
@@ -321,6 +337,8 @@ async def create_study_goal(goal: StudyGoal) -> dict:
 
 async def get_weekly_study_hours(user_id: str) -> float:
     """Total hours of completed study sessions in the past 7 days."""
+    if MOCK_DB:
+        return 2.5
     conn = await get_connection()
     try:
         row = await conn.fetchrow(
@@ -343,6 +361,8 @@ async def get_study_streak(user_id: str) -> int:
     Counts how many consecutive days (ending today) the user
     completed at least one study session.
     """
+    if MOCK_DB:
+        return 3
     conn = await get_connection()
     try:
         rows = await conn.fetch(

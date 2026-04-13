@@ -172,7 +172,17 @@ async def tool_get_learning_status(user_id: str) -> str:
         }, default=str)
     except Exception as exc:
         logger.error("tool_get_learning_status failed: %s", exc)
-        return _json_error("Failed to fetch learning status.")
+        return json.dumps(
+            {
+                "error": "Failed to fetch learning status.",
+                "resources": [],
+                "upcoming_sessions": [],
+                "active_goals": [],
+                "weekly_hours_studied": 0,
+                "streak_days": 0,
+            },
+            default=str,
+        )
 
 
 async def tool_add_learning_resource(
