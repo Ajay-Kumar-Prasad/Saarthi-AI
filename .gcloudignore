@@ -1,0 +1,28 @@
+# Python
+.venv
+__pycache__
+*.pyc
+
+# Node
+node_modules
+frontend/node_modules
+
+# Git
+.git
+.gitignore
+
+# Env
+.env
+
+# OS junk
+.DS_Store
+
+# Build artifacts
+dist
+build
+
+# Logs
+*.log
+
+# Optional large folders
+frontend/.next
