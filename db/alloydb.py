@@ -129,7 +129,7 @@ async def _connect_direct() -> asyncpg.Connection:
 
 
 async def _create_pool() -> asyncpg.Pool:
-    async def _connect():
+    async def _connect(*args, **kwargs):
         if _use_iam_mode():
             return await _connect_via_iam()
         return await _connect_direct()
