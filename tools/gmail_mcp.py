@@ -5,9 +5,7 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from datetime import datetime
-from db.finance_db import insert_expense
-
-from db import insert_expense  # ✅ ADD THIS LINE
+# Optional DB persist can use db.finance_db.insert_expense via an async bridge if needed.
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 

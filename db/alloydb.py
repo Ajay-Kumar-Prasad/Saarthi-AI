@@ -1,34 +1,45 @@
 """
 Production AlloyDB async access layer.
 
-Supports:
-- IAM auth via AlloyDB connector (preferred)
-- Direct host/port auth fallback
-- Async connection pooling
-- Retry for transient connection failures
+Supports one explicit connection mode at a time:
+- IAM auth via AlloyDB connector
+- Direct host/port auth (proxy/private-ip compatible)
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import asyncpg
 from google.auth import default
+from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.alloydb.connector import AsyncConnector
+
+from core.config import get_db_settings
 
 logger = logging.getLogger(__name__)
 
 _connector: AsyncConnector | None = None
 _pool: asyncpg.Pool | None = None
 _pool_lock = asyncio.Lock()
+_connector_lock = asyncio.Lock()
 
 _TRANSIENT_ERRORS = (
     asyncpg.PostgresConnectionError,
     asyncpg.CannotConnectNowError,
     asyncpg.ConnectionDoesNotExistError,
+    asyncpg.TooManyConnectionsError,
     OSError,
     TimeoutError,
+    asyncio.TimeoutError,
+)
+
+_AUTH_ERRORS = (
+    DefaultCredentialsError,
+    asyncpg.InvalidAuthorizationSpecificationError,
+    asyncpg.InvalidPasswordError,
 )
 
 
@@ -49,97 +60,165 @@ class _ConnectionProxy:
             await self._pool.release(self._conn)
 
 
-def _env(name: str, default_value: str = "") -> str:
-    return os.getenv(name, default_value).strip()
+def _classify_db_error(exc: Exception) -> str:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(exc, _AUTH_ERRORS):
+        return "auth"
+    if isinstance(exc, OSError):
+        return "network"
+    return "unknown"
 
 
-async def _with_retries(coro_factory, operation: str, attempts: int = 3):
+async def _with_retries(
+    coro_factory: Callable[[], Awaitable[Any]],
+    operation: str,
+    attempts: int | None = None,
+):
+    settings = get_db_settings()
+    max_attempts = attempts or settings.db_retry_attempts
     delay = 0.5
     last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
+
+    for attempt in range(1, max_attempts + 1):
         try:
             return await coro_factory()
+        except _AUTH_ERRORS as exc:
+            logger.exception(
+                "DB auth failure during %s (attempt=%d/%d, class=%s)",
+                operation,
+                attempt,
+                max_attempts,
+                _classify_db_error(exc),
+            )
+            raise
         except _TRANSIENT_ERRORS as exc:
             last_exc = exc
             logger.warning(
-                "Transient DB error during %s (attempt=%d/%d): %s",
+                "Transient DB error during %s (attempt=%d/%d, class=%s): %s",
                 operation,
                 attempt,
-                attempts,
+                max_attempts,
+                _classify_db_error(exc),
                 exc,
             )
-            if attempt < attempts:
+            if attempt < max_attempts:
                 await asyncio.sleep(delay)
                 delay *= 2
-        except Exception:
-            logger.exception("Non-transient DB error during %s", operation)
+        except Exception as exc:
+            logger.exception(
+                "Non-transient DB error during %s (class=%s)",
+                operation,
+                _classify_db_error(exc),
+            )
             raise
-    raise RuntimeError(f"{operation} failed after {attempts} attempts: {last_exc}")
+
+    logger.error(
+        "DB operation failed after retries operation=%s attempts=%d class=%s error=%s",
+        operation,
+        max_attempts,
+        _classify_db_error(last_exc) if last_exc else "unknown",
+        last_exc,
+    )
+    raise RuntimeError(f"{operation} failed after {max_attempts} attempts: {last_exc}")
 
 
 async def _get_connector() -> AsyncConnector:
     global _connector
-    if _connector is None:
-        credentials, _ = default()
-        _connector = AsyncConnector(credentials=credentials)
-        logger.info("Initialized AlloyDB async connector with IAM credentials.")
+    if _connector is not None:
+        return _connector
+
+    async with _connector_lock:
+        if _connector is None:
+            credentials, _ = default()
+            _connector = AsyncConnector(credentials=credentials)
+            logger.info("Initialized AlloyDB async connector (IAM).")
     return _connector
 
 
-def _use_iam_mode() -> bool:
-    return bool(_env("ALLOYDB_INSTANCE_URI") and _env("ALLOYDB_DB") and _env("ALLOYDB_IAM_USER"))
-
-
 async def _connect_via_iam() -> asyncpg.Connection:
+    settings = get_db_settings()
     connector = await _get_connector()
-    instance_uri = _env("ALLOYDB_INSTANCE_URI")
-    database = _env("ALLOYDB_DB")
-    iam_user = _env("ALLOYDB_IAM_USER")
-    if not (instance_uri and database and iam_user):
-        raise RuntimeError("Missing IAM DB configuration: ALLOYDB_INSTANCE_URI/ALLOYDB_DB/ALLOYDB_IAM_USER")
 
-    return await connector.connect(
-        instance_uri,
-        "asyncpg",
-        user=iam_user,
-        db=database,
-        enable_iam_auth=True,
-    )
+    if settings.debug:
+        logger.info(
+            "Attempting IAM AlloyDB connection instance=%s db=%s iam_user=%s",
+            settings.alloydb_instance_uri,
+            settings.alloydb_db,
+            settings.alloydb_iam_user,
+        )
+
+    try:
+        return await asyncio.wait_for(
+            connector.connect(
+                settings.alloydb_instance_uri,
+                "asyncpg",
+                user=settings.alloydb_iam_user,
+                db=settings.alloydb_db,
+                enable_iam_auth=True,
+            ),
+            timeout=settings.db_connect_timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.exception(
+            "IAM AlloyDB connection timed out after %.2fs",
+            settings.db_connect_timeout_seconds,
+        )
+        raise TimeoutError("IAM AlloyDB connection timed out.") from exc
+    except Exception:
+        logger.exception("IAM AlloyDB connection failed.")
+        raise
 
 
 async def _connect_direct() -> asyncpg.Connection:
-    host = _env("DB_HOST")
-    port = int(_env("DB_PORT", "5432"))
-    user = _env("DB_USER")
-    password = _env("DB_PASS")
-    database = _env("DB_NAME")
-    ssl_mode = _env("DB_SSL", "false").lower() == "true"
+    settings = get_db_settings()
+    if settings.debug:
+        logger.info(
+            "Attempting direct DB connection host=%s port=%d db=%s user=%s ssl=%s",
+            settings.db_host,
+            settings.db_port,
+            settings.db_name,
+            settings.db_user,
+            settings.db_ssl,
+        )
 
-    if not all([host, user, database]):
-        raise RuntimeError("Missing direct DB configuration: DB_HOST/DB_USER/DB_NAME")
-
-    return await asyncpg.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        ssl=ssl_mode,
-    )
+    try:
+        return await asyncpg.connect(
+            host=settings.db_host,
+            port=settings.db_port,
+            user=settings.db_user,
+            password=settings.db_pass,
+            database=settings.db_name,
+            ssl=settings.db_ssl,
+            timeout=settings.db_connect_timeout_seconds,
+        )
+    except Exception:
+        logger.exception("Direct DB connection failed.")
+        raise
 
 
 async def _create_pool() -> asyncpg.Pool:
+    settings = get_db_settings()
+    settings.validate_for_startup()
+
     async def _connect(*args, **kwargs):
-        if _use_iam_mode():
+        del args, kwargs
+        if settings.mode == "iam":
             return await _connect_via_iam()
         return await _connect_direct()
 
-    logger.info("Creating AlloyDB pool (mode=%s)", "iam" if _use_iam_mode() else "direct")
+    logger.info(
+        "Creating AlloyDB pool mode=%s min_size=%d max_size=%d acquire_timeout=%.2fs",
+        settings.mode,
+        settings.db_pool_min_size,
+        settings.db_pool_max_size,
+        settings.db_pool_acquire_timeout_seconds,
+    )
     return await asyncpg.create_pool(
-        min_size=int(_env("DB_POOL_MIN_SIZE", "1")),
-        max_size=int(_env("DB_POOL_MAX_SIZE", "10")),
-        max_inactive_connection_lifetime=float(_env("DB_POOL_MAX_IDLE_SECONDS", "300")),
-        timeout=float(_env("DB_POOL_ACQUIRE_TIMEOUT_SECONDS", "10")),
+        min_size=settings.db_pool_min_size,
+        max_size=settings.db_pool_max_size,
+        max_inactive_connection_lifetime=settings.db_pool_max_idle_seconds,
+        timeout=settings.db_pool_acquire_timeout_seconds,
         init=lambda conn: conn.execute("SET TIME ZONE 'UTC'"),
         connect=_connect,
     )
@@ -147,11 +226,17 @@ async def _create_pool() -> asyncpg.Pool:
 
 async def _get_pool() -> asyncpg.Pool:
     global _pool
-    if _pool is None:
-        async with _pool_lock:
-            if _pool is None:
-                _pool = await _with_retries(_create_pool, "create_db_pool")
+    if _pool is not None:
+        return _pool
+
+    async with _pool_lock:
+        if _pool is None:
+            _pool = await _with_retries(_create_pool, "create_db_pool")
     return _pool
+
+
+async def init_pool() -> None:
+    await _get_pool()
 
 
 async def get_connection() -> asyncpg.Connection:
@@ -219,3 +304,17 @@ async def close_pool() -> None:
         await _pool.close()
         _pool = None
         logger.info("AlloyDB pool closed.")
+
+
+async def close_connector() -> None:
+    global _connector
+    if _connector is not None:
+        try:
+            maybe_coro = _connector.close()
+            if asyncio.iscoroutine(maybe_coro):
+                await maybe_coro
+        except Exception:
+            logger.exception("Failed to close AlloyDB IAM connector cleanly.")
+        finally:
+            _connector = None
+            logger.info("AlloyDB IAM connector closed.")

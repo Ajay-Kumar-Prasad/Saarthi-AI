@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.concurrency import run_in_threadpool
 
 from agents.finance_agent import run_finance_agent, sync_gmail_expenses
 from db.finance_db import get_all_expenses
@@ -24,16 +23,16 @@ async def finance_chat(req: ChatRequest):
 @router.get("/finance/expenses", response_model=AgentResponse)
 async def finance_expenses(user_id: str | None = Query(default=None, min_length=1)):
     try:
-        rows = await run_in_threadpool(get_all_expenses, user_id)
+        rows = await get_all_expenses(user_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch expenses: {exc}") from exc
     expenses = [
         {
             "id": i,
-            "amount": float(r[0]),
-            "category": r[1],
-            "description": r[2],
-            "expense_date": r[3].isoformat() if hasattr(r[3], "isoformat") else str(r[3]),
+            "amount": float(r["amount"]),
+            "category": r["category"],
+            "description": r["description"],
+            "expense_date": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
         }
         for i, r in enumerate(rows)
     ]
@@ -50,11 +49,13 @@ async def finance_expenses(user_id: str | None = Query(default=None, min_length=
 @router.get("/finance/summary", response_model=AgentResponse)
 async def finance_summary(user_id: str | None = Query(default=None, min_length=1)):
     try:
-        rows = await run_in_threadpool(get_all_expenses, user_id)
+        rows = await get_all_expenses(user_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch finance summary: {exc}") from exc
     totals: dict[str, float] = {}
-    for amount, category, *_ in rows:
+    for row in rows:
+        category = row["category"]
+        amount = row["amount"]
         totals[category] = totals.get(category, 0.0) + float(amount)
     summary = [{"category": k, "total": v} for k, v in totals.items()]
     return AgentResponse(
@@ -70,7 +71,7 @@ async def finance_summary(user_id: str | None = Query(default=None, min_length=1
 @router.post("/sync-gmail", response_model=AgentResponse)
 async def sync_gmail():
     try:
-        await run_in_threadpool(sync_gmail_expenses)
+        await sync_gmail_expenses()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start Gmail sync: {exc}") from exc
     return AgentResponse(

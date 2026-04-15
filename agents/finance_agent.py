@@ -1,8 +1,8 @@
+import asyncio
 import json
 import logging
 import os
 import re
-import threading
 from datetime import datetime
 from typing import Any
 
@@ -76,15 +76,15 @@ def _get_sheet():
         return None
 
 
-def _safe_get_expenses(user_id: str) -> list[Any]:
+async def _safe_get_expenses(user_id: str) -> list[dict[str, Any]]:
     try:
-        return get_all_expenses(user_id)
+        return await get_all_expenses(user_id)
     except Exception as exc:
         logger.exception("Failed to fetch expenses for user_id=%s", user_id)
         return []
 
 
-def _save_expense(args: dict[str, Any], user_id: str) -> tuple[str, list[str], dict[str, Any]]:
+async def _save_expense(args: dict[str, Any], user_id: str) -> tuple[str, list[str], dict[str, Any]]:
     warnings: list[str] = []
     raw_amount = args.get("amount", 0)
     category = str(args.get("category", "other") or "other").strip() or "other"
@@ -103,7 +103,7 @@ def _save_expense(args: dict[str, Any], user_id: str) -> tuple[str, list[str], d
     sheet_saved = False
 
     try:
-        insert_expense(amount, category, description, now, user_id)
+        await insert_expense(amount, category, description, now, user_id)
         db_saved = True
     except Exception:
         logger.exception("DB write failed for user_id=%s", user_id)
@@ -112,7 +112,7 @@ def _save_expense(args: dict[str, Any], user_id: str) -> tuple[str, list[str], d
     sheet = _get_sheet()
     if sheet:
         try:
-            sheet.append_row([str(now), amount, category, description])
+            await asyncio.to_thread(sheet.append_row, [str(now), amount, category, description])
             sheet_saved = True
         except Exception as exc:
             logger.warning("Sheets write failed: %s", exc)
@@ -132,34 +132,39 @@ def _save_expense(args: dict[str, Any], user_id: str) -> tuple[str, list[str], d
     }
 
 
-def _get_last_expense(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
-    rows = _safe_get_expenses(user_id)
+async def _get_last_expense(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
+    rows = await _safe_get_expenses(user_id)
     if not rows:
         return "No expenses found.", [], {"count": 0}
 
     row = rows[0]
     try:
-        message = f"Last expense: {float(row[0]):.2f} in {row[1]} on {row[3]}."
+        message = (
+            f"Last expense: {float(row['amount']):.2f} "
+            f"in {row['category']} on {row['date']}."
+        )
     except Exception:
         message = "Found last expense record."
     return message, [], {"last_expense": str(row)}
 
 
-def _get_spending_summary(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
-    rows = _safe_get_expenses(user_id)
+async def _get_spending_summary(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
+    rows = await _safe_get_expenses(user_id)
     if not rows:
         return "No expense data available.", [], {"summary": {}}
 
     totals: dict[str, float] = {}
-    for amount, category, *_ in rows:
-        totals[str(category)] = totals.get(str(category), 0.0) + float(amount)
+    for row in rows:
+        category = str(row.get("category") or "other")
+        amount = float(row.get("amount") or 0.0)
+        totals[category] = totals.get(category, 0.0) + amount
     summary_line = ", ".join(f"{k}: {v:.2f}" for k, v in totals.items())
     return f"Spending summary: {summary_line}.", [], {"summary": totals}
 
 
-def _get_weekly_spending(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
-    rows = _safe_get_expenses(user_id)
-    total = sum(float(r[0]) for r in rows) if rows else 0.0
+async def _get_weekly_spending(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
+    rows = await _safe_get_expenses(user_id)
+    total = sum(float(r.get("amount") or 0.0) for r in rows) if rows else 0.0
     warnings = ["high_spending"] if total > 3000 else []
     message = f"Total spending: {total:.2f}."
     if warnings:
@@ -167,7 +172,7 @@ def _get_weekly_spending(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
     return message, warnings, {"total_spending": total, "threshold": 3000}
 
 
-def sync_gmail_expenses() -> None:
+async def sync_gmail_expenses() -> None:
     def _run() -> None:
         try:
             from tools.gmail_mcp import read_messages_and_save
@@ -186,20 +191,23 @@ def sync_gmail_expenses() -> None:
         except Exception:
             logger.exception("Gmail sync failed")
 
-    threading.Thread(target=_run, daemon=True).start()
+    asyncio.create_task(asyncio.to_thread(_run))
 
 
-def _run_selected_tool(tool_name: str, args: dict[str, Any], user_id: str) -> tuple[str, list[str], dict[str, Any]]:
-    tool_map = {
-        "save_expense": _save_expense,
-        "get_last_expense": lambda _args, uid: _get_last_expense(uid),
-        "get_spending_summary": lambda _args, uid: _get_spending_summary(uid),
-        "get_weekly_spending": lambda _args, uid: _get_weekly_spending(uid),
-    }
-    handler = tool_map.get(tool_name)
-    if not handler:
+async def _run_selected_tool(
+    tool_name: str, args: dict[str, Any], user_id: str
+) -> tuple[str, list[str], dict[str, Any]]:
+    if tool_name == "save_expense":
+        return await _save_expense(args, user_id)
+    if tool_name == "get_last_expense":
+        return await _get_last_expense(user_id)
+    if tool_name == "get_spending_summary":
+        return await _get_spending_summary(user_id)
+    if tool_name == "get_weekly_spending":
+        return await _get_weekly_spending(user_id)
+    if not tool_name:
         return f"Unknown finance tool: {tool_name}", ["unknown_tool"], {"tool": tool_name}
-    return handler(args, user_id)
+    return f"Unknown finance tool: {tool_name}", ["unknown_tool"], {"tool": tool_name}
 
 
 def _classify_intent_with_llm(message: str) -> dict[str, Any]:
@@ -225,7 +233,7 @@ async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
         return _build_response(AgentStatus.ERROR, "user_id is required.")
 
     try:
-        action = _classify_intent_with_llm(message.strip())
+        action = await asyncio.to_thread(_classify_intent_with_llm, message.strip())
     except json.JSONDecodeError:
         logger.warning("Finance LLM output was not valid JSON.")
         return _build_response(AgentStatus.PARTIAL, "No finance action needed.")
@@ -242,7 +250,7 @@ async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
         return _build_response(AgentStatus.PARTIAL, "No finance action needed.", data={"tool": "none"})
 
     try:
-        summary, warnings, result_data = _run_selected_tool(tool_name, args, user_id.strip())
+        summary, warnings, result_data = await _run_selected_tool(tool_name, args, user_id.strip())
     except Exception as exc:
         logger.exception("Finance tool execution crashed for tool=%s", tool_name)
         return _build_response(AgentStatus.ERROR, f"Finance tool execution failed: {exc}", actions_taken=[tool_name])

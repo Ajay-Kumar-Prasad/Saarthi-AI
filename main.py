@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -9,8 +10,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from auth.google_oauth import router as auth_router
+from core.config import get_db_settings
 from core.config import get_settings
 from core.logging import configure_logging
+from db.alloydb import close_connector, close_pool, init_pool
 from routers.finance import router as finance_router
 from routers.health import router as health_router
 from routers.learning import router as learning_router
@@ -35,11 +38,25 @@ def _error_payload(detail: str, error_type: str) -> dict:
     return ErrorResponse(detail=detail, error_type=error_type).model_dump()
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    db_settings = get_db_settings()
+    db_settings.validate_for_startup()
+    logger.info("DB configuration validated at startup (mode=%s).", db_settings.mode)
+    await init_pool()
+    try:
+        yield
+    finally:
+        await close_pool()
+        await close_connector()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         description=settings.app_description,
         version=settings.app_version,
+        lifespan=lifespan,
     )
 
     app.add_middleware(
