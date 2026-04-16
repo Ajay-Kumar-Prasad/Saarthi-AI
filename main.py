@@ -14,7 +14,7 @@ from core.config import get_db_settings
 from core.config import get_settings
 from core.logging import configure_logging
 from db.alloydb import close_connector, close_pool, init_pool
-from routers.finance import router as finance_router
+from routers import finance
 from routers.health import router as health_router
 from routers.learning import router as learning_router
 from routers.orchestrator import router as orchestrator_router
@@ -42,7 +42,7 @@ def _error_payload(detail: str, error_type: str) -> dict:
 async def lifespan(_: FastAPI):
     db_settings = get_db_settings()
     db_settings.validate_for_startup()
-    logger.info("DB configuration validated at startup (mode=%s).", db_settings.mode)
+    logger.info("DB configuration validated at startup.")
     await init_pool()
     try:
         yield
@@ -97,8 +97,12 @@ def create_app() -> FastAPI:
     app.include_router(learning_router)
     app.include_router(work_router)
     app.include_router(health_router)
-    app.include_router(finance_router)
+    app.include_router(finance.router, prefix="/finance")
+    print("Finance router loaded")
     app.include_router(social_router)
+
+    for route in app.routes:
+        print(route.path)
 
     return app
 

@@ -59,7 +59,7 @@ from db.learning_db import (
     get_all_resources,
     add_resource,
     update_resource_progress,
-    get_upcoming_sessions,
+    get_all_sessions,
     create_study_session,
     mark_session_complete,
     get_active_goals,
@@ -150,7 +150,7 @@ async def tool_get_learning_status(user_id: str) -> str:
     going?', or when the orchestrator needs learning context.
 
     Args:
-        user_id: The user's UUID string.
+        user_id: The user's email string.
 
     Returns:
         JSON string with keys: resources, sessions, goals, weekly_hours, streak_days.
@@ -158,18 +158,42 @@ async def tool_get_learning_status(user_id: str) -> str:
     if not user_id:
         return _json_error("user_id is required.")
     try:
-        resources = await get_all_resources(user_id, status="in_progress")
-        sessions = await get_upcoming_sessions(user_id, days_ahead=7)
+        logger.info("Fetching data for user: %s", user_id)
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        
+        all_resources = await get_all_resources(user_id)
+        all_sessions = await get_all_sessions(user_id)
         goals = await get_active_goals(user_id)
         weekly_hours = await get_weekly_study_hours(user_id)
         streak = await get_study_streak(user_id)
-        return json.dumps({
+        
+        resources = [
+            r for r in all_resources
+            if r.get("status") in (None, "in_progress", "not_started")
+        ]
+        
+        sessions = [
+            s for s in all_sessions
+            if s.get("scheduled_at")
+        ]
+        
+        raw_db = {
             "resources": resources,
             "upcoming_sessions": sessions,
             "active_goals": goals,
             "weekly_hours_studied": round(weekly_hours, 1),
             "streak_days": streak,
-        }, default=str)
+        }
+        
+        if not resources and not sessions:
+            insight = "No learning activity found"
+        else:
+            insight = f"{len(resources)} resources and {len(sessions)} sessions available"
+            
+        logger.info("DB result: %s", raw_db)
+        return json.dumps({"raw": raw_db, "insight": insight}, default=str)
     except Exception as exc:
         logger.error("tool_get_learning_status failed: %s", exc)
         return json.dumps(
@@ -199,7 +223,7 @@ async def tool_add_learning_resource(
     Use when the user says 'I want to read X', 'add Y course', 'I started Z'.
 
     Args:
-        user_id:       User UUID.
+        user_id:       User email string.
         title:         Title of the book/course/article.
         resource_type: One of: book | course | article | video | podcast.
         url:           Optional URL (for online courses or articles).
@@ -251,7 +275,7 @@ async def tool_update_progress(
     'I completed 70% of the course'.
 
     Args:
-        user_id:      User UUID.
+        user_id:      User email string.
         resource_id:  UUID of the resource to update.
         progress_pct: Completion percentage 0-100.
         current_page: Current page number if it's a book (0 if not applicable).
@@ -298,7 +322,7 @@ async def tool_schedule_study_session(
     avoids clashing with existing calendar events.
 
     Args:
-        user_id:          User UUID.
+        user_id:          User email string.
         resource_id:      UUID of the learning resource.
         resource_title:   Display title (used in calendar event name).
         date:             ISO date string e.g. '2026-04-10'.
@@ -523,7 +547,7 @@ async def tool_log_study_note(
     Use when the user says 'take a note', 'I learned that...', 'save this'.
 
     Args:
-        user_id:         User UUID.
+        user_id:         User email string.
         resource_title:  Which book/course this note relates to.
         note_content:    The note text to save.
         tags:            Comma-separated topic tags.
@@ -555,7 +579,7 @@ async def tool_get_notes(user_id: str, resource_title: str = "") -> str:
     Use when the user asks 'show my notes on X', 'what did I write about Y'.
 
     Args:
-        user_id:        User UUID.
+        user_id:        User email string.
         resource_title: Optional filter — leave blank to get all learning notes.
 
     Returns:
@@ -581,7 +605,7 @@ async def tool_mark_session_done(
     Use when the user says 'done with today's study', 'completed my session'.
 
     Args:
-        user_id:    User UUID.
+        user_id:    User email string.
         session_id: UUID of the study session.
         notes:      Optional notes about what was studied.
 
@@ -607,7 +631,7 @@ async def tool_query_learning_history(user_id: str, question: str) -> str:
     'Which courses have I paused?', 'What did I complete this year?'
 
     Args:
-        user_id:  User UUID.
+        user_id:  User email string.
         question: Natural language question about their learning history.
 
     Returns:
@@ -633,7 +657,7 @@ async def tool_create_study_goal(
     Use when the user sets a long-term learning objective.
 
     Args:
-        user_id:              User UUID.
+        user_id:              User email string.
         title:                Goal description.
         target_date:          ISO date string e.g. '2026-06-30'.
         weekly_hours_target:  Hours per week to invest.
@@ -679,7 +703,7 @@ async def tool_analyze_skill_gap(user_id: str, role_name: str) -> str:
     If the user names a role not in this list, pick the closest match.
  
     Args:
-        user_id:   The user's UUID string.
+        user_id:   The user's email string.
         role_name: Career role to analyse against e.g. "Data Engineer".
  
     Returns:
@@ -758,7 +782,7 @@ async def tool_schedule_flashcard_review(
         5 = perfect recall
  
     Args:
-        user_id:      The user's UUID string.
+        user_id:      The user's email string.
         action:       "due" | "create" | "review"
         resource_id:  UUID of the resource (required for 'create').
         question:     Flashcard front (required for 'create').
@@ -843,7 +867,7 @@ async def tool_recommend_resources(user_id: str, goal: str = "") -> str:
     — the recommendation is generated by the agent itself using AlloyDB data.
  
     Args:
-        user_id: The user's UUID string.
+        user_id: The user's email string.
         goal:    Optional goal context e.g. "become a data engineer" or
                  "pass the GCP exam". Leave blank for general recommendations.
  
@@ -924,7 +948,7 @@ async def tool_create_learning_path(
       4. Creates the path and saves all steps to AlloyDB
  
     Args:
-        user_id:     The user's UUID string.
+        user_id:     The user's email string.
         action:      "create" | "view" | "update_step"
         title:       Path title (for 'create') e.g. "Road to Data Engineer"
         target_role: Career goal (for 'create') e.g. "Data Engineer"
@@ -1713,6 +1737,7 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
     Run the learning agent directly (used for unit tests and the demo endpoint).
     In production the orchestrator calls this agent via sub_agents=[learning_agent].
     """
+    logger.info(f"[learning_agent] received user_id: {user_id}")
     if not _is_valid_user_id(user_id):
         return _build_agent_response(AgentStatus.ERROR, "Missing required user_id.")
     if not _is_valid_message(message):
@@ -1971,20 +1996,12 @@ async def run_learning_agent(message: str, user_id: str) -> AgentResponse:
                 )
 
         # DEFAULT — status
-        raw = await tool_get_learning_status(user_id)
-        data = _safe_json_loads(raw, fallback={})
-        resources = data.get("resources", [])
-        titles = (
-            ", ".join(
-                str(r.get("title", "unknown")) if isinstance(r, dict) else str(r)
-                for r in resources
-            )
-            if resources
-            else "none"
-        )
+        raw_output = await tool_get_learning_status(user_id)
+        data = _safe_json_loads(raw_output, fallback={"raw": {}, "insight": "No learning activity found"})
+        
         return _build_agent_response(
             AgentStatus.OK,
-            f"Currently studying: {titles}.",
+            data.get("insight", "Learning status retrieved."),
             actions_taken=["tool_get_learning_status"],
             data=data,
         )

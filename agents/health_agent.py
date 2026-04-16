@@ -67,10 +67,7 @@ from db.health_db import (
     save_activity_sessions,
     save_daily_metrics,
     update_resting_heart_rate,
-    build_health_summary,
-    get_sleep_summary_from_db,
-    get_activity_summary_from_db,
-    get_daily_metrics_from_db,
+    get_health_summary,
 )
 from models.schemas import (
     AgentResponse,
@@ -163,7 +160,7 @@ async def sync_all_health_data(user_id: str, days: int = 30) -> dict:
     NOT exposed as an ADK tool — the agent reads from DB only during chat.
 
     Args:
-        user_id: The user's UUID string.
+        user_id: The user's email string.
         days:    Number of past days to back-fill (default 30).
 
     Returns:
@@ -216,218 +213,57 @@ def _strip_code_fences(text: str) -> str:
 # These are the ONLY tools the agent uses during a chat session.
 # All reads go to AlloyDB — no Google Fit API calls at chat time.
 
-async def tool_get_sleep_from_db(user_id: str, days: int = 7) -> str:
-    """
-    Read the user's sleep sessions for the last `days` days from AlloyDB.
-    Returns sleep duration, start/end times, and sleep stage breakdown.
-    Use this when the user asks about sleep quality, duration, or patterns.
-    Data was pre-loaded from Google Fit during onboarding.
+def generate_health_insight(data: list[dict]) -> str:
+    if not data:
+        return "No health data available."
 
-    Args:
-        user_id: The user's UUID string.
-        days:    Number of past days to read (default 7, max 30).
+    total_steps_list = [r.get("total_steps") or 0 for r in data if r.get("total_steps") is not None]
+    if not total_steps_list:
+        return "No activity data found"
+        
+    avg_steps = sum(total_steps_list) / len(total_steps_list)
 
-    Returns:
-        JSON string with keys: sessions, count, period_days.
-    """
-    if not _is_valid_user_id(user_id):
-        return _json_error("user_id is required.")
-    days = _sanitize_days(days, default=7, max_days=30)
-    try:
-        sessions = await get_sleep_summary_from_db(user_id, days)
-        return json.dumps({
-            "sessions": [s.model_dump() for s in sessions],
-            "count": len(sessions),
-            "period_days": days,
-        }, default=str)
-    except Exception as exc:
-        logger.exception("tool_get_sleep_from_db failed user_id=%s", user_id)
-        return _json_error("Failed to fetch sleep data.", details=str(exc))
+    if avg_steps < 3000:
+        insight = "Low activity level"
+    elif avg_steps < 7000:
+        insight = "Moderate activity"
+    else:
+        insight = "Good activity level"
+        
+    if all(d.get("sleep_duration_min") is None for d in data):
+        insight += ". Sleep data not available"
+        
+    return insight
 
-
-async def tool_get_activity_from_db(user_id: str, days: int = 7) -> str:
-    """
-    Read the user's workout and activity sessions for the last `days` days from AlloyDB.
-    Returns activity type (running, cycling, yoga, etc.), duration, calories burned,
-    steps, and average heart rate per session.
-    Use this when the user asks about workouts, exercise history, or activity levels.
-    Data was pre-loaded from Google Fit during onboarding.
-
-    Args:
-        user_id: The user's UUID string.
-        days:    Number of past days to read (default 7, max 30).
-
-    Returns:
-        JSON string with keys: sessions, count, period_days.
-    """
-    if not _is_valid_user_id(user_id):
-        return _json_error("user_id is required.")
-    days = _sanitize_days(days, default=7, max_days=30)
-    try:
-        sessions = await get_activity_summary_from_db(user_id, days)
-        return json.dumps({
-            "sessions": [s.model_dump() for s in sessions],
-            "count": len(sessions),
-            "period_days": days,
-        }, default=str)
-    except Exception as exc:
-        logger.exception("tool_get_activity_from_db failed user_id=%s", user_id)
-        return _json_error("Failed to fetch activity data.", details=str(exc))
-
-
-async def tool_get_daily_metrics_from_db(user_id: str, days: int = 7) -> str:
-    """
-    Read daily aggregate metrics (steps, calories, active minutes, resting heart rate)
-    for the last `days` days from AlloyDB.
-    Use this when the user asks about step counts, calorie burn, or daily activity trends.
-    Data was pre-loaded from Google Fit during onboarding.
-
-    Args:
-        user_id: The user's UUID string.
-        days:    Number of past days to read (default 7, max 30).
-
-    Returns:
-        JSON string with keys: daily_metrics, count, period_days.
-    """
-    if not _is_valid_user_id(user_id):
-        return _json_error("user_id is required.")
-    days = _sanitize_days(days, default=7, max_days=30)
-    try:
-        metrics = await get_daily_metrics_from_db(user_id, days)
-        return json.dumps({
-            "daily_metrics": [m.model_dump() for m in metrics],
-            "count": len(metrics),
-            "period_days": days,
-        }, default=str)
-    except Exception as exc:
-        logger.exception("tool_get_daily_metrics_from_db failed user_id=%s", user_id)
-        return _json_error("Failed to fetch daily metrics.", details=str(exc))
-
-
-async def tool_get_health_summary(user_id: str, days: int = 7) -> str:
+async def tool_get_health_summary(user_id: str) -> str:
     """
     Build a comprehensive health summary from AlloyDB data.
-    Aggregates sleep, activity, daily metrics, and resting heart rate into one object.
-    Use this for an overall health overview or when the user asks 'how am I doing?'.
-    Data was pre-loaded from Google Fit during onboarding.
-
     Args:
-        user_id: The user's UUID string.
-        days:    Number of past days to summarize (default 7).
-
+        user_id: The user's email string.
     Returns:
-        JSON string with the full HealthSummary object.
+        JSON string.
     """
+    logger.info("Fetching data for user: %s", user_id)
     if not _is_valid_user_id(user_id):
         return _json_error("user_id is required.")
-    days = _sanitize_days(days, default=7, max_days=30)
     try:
-        summary = await build_health_summary(user_id, days)
-        return json.dumps(summary.model_dump(), default=str)
+        raw_db = await get_health_summary(user_id)
+        
+        data = []
+        for r in raw_db:
+            row = dict(r)
+            if row.get("total_calories") is not None:
+                row["total_calories"] = float(row["total_calories"])
+            data.append(row)
+            
+        logger.info("DB result: %s", data)
+        return json.dumps({
+            "raw": data,
+            "insight": generate_health_insight(data)
+        }, default=str)
     except Exception as exc:
         logger.exception("tool_get_health_summary failed user_id=%s", user_id)
         return _json_error("Failed to build health summary.", details=str(exc))
-
-
-async def tool_analyze_health_trends(user_id: str, days: int = 14) -> str:
-    """
-    Perform a cross-domain health trend analysis using AlloyDB data.
-    Compares sleep patterns against activity levels to detect correlations and anomalies.
-    Examples: 'sleep is worse on high-activity days', 'resting heart rate elevated this week',
-    'not hitting step goals on weekdays'.
-    Use this for deep health insights and conflict detection.
-
-    Args:
-        user_id: The user's UUID string.
-        days:    Number of past days to analyze (default 14).
-
-    Returns:
-        JSON string with keys: insights, conflicts, confidence, period_days, summary.
-    """
-    if not _is_valid_user_id(user_id):
-        return _json_error("user_id is required.")
-    days = _sanitize_days(days, default=14, max_days=30)
-    try:
-        summary = await build_health_summary(user_id, days)
-    except Exception as exc:
-        logger.exception("tool_analyze_health_trends failed user_id=%s", user_id)
-        return _json_error("Failed to analyze health trends.", details=str(exc))
-    insights = []
-    conflicts = []
-
-    sleep_sessions = summary.sleep_sessions
-    daily_metrics = summary.daily_metrics
-
-    # Sleep analysis
-    if sleep_sessions:
-        under_7h = [s for s in sleep_sessions if s.duration_minutes < 420]
-        if len(under_7h) > len(sleep_sessions) * 0.5:
-            insights.append(
-                f"More than half of nights ({len(under_7h)}/{len(sleep_sessions)}) "
-                f"had less than 7 hours of sleep."
-            )
-            conflicts.append(f"chronic_sleep_deficit: {len(under_7h)} nights under 7h")
-        avg_sleep_h = round((summary.avg_sleep_minutes or 0) / 60, 1)
-        if avg_sleep_h > 0:
-            insights.append(f"Average sleep duration: {avg_sleep_h} hours per night.")
-
-    # Step analysis
-    if summary.avg_steps:
-        avg_steps = int(summary.avg_steps)
-        if avg_steps < 7500:
-            insights.append(
-                f"Average daily steps ({avg_steps:,}) is below the recommended 7,500-10,000."
-            )
-            conflicts.append(f"low_step_count: avg {avg_steps:,} steps/day")
-        else:
-            insights.append(f"Average daily steps: {avg_steps:,} — meeting activity goals.")
-
-    # Sleep vs activity correlation
-    if sleep_sessions and daily_metrics:
-        sleep_by_date = {s.date: s.duration_minutes for s in sleep_sessions}
-        metrics_by_date = {m.date: m for m in daily_metrics}
-        for date, sleep_min in sleep_by_date.items():
-            metric = metrics_by_date.get(date)
-            if metric and metric.active_minutes and metric.active_minutes > 60 and sleep_min < 360:
-                conflict_msg = (
-                    f"high_activity_low_sleep on {date}: "
-                    f"active {metric.active_minutes} min but only slept {round(sleep_min/60, 1)}h"
-                )
-                conflicts.append(conflict_msg)
-                insights.append(
-                    f"On {date}: active for {metric.active_minutes} min but only slept "
-                    f"{round(sleep_min/60, 1)}h — recovery may be insufficient."
-                )
-
-    # Heart rate analysis
-    if summary.avg_resting_heart_rate:
-        rhr = summary.avg_resting_heart_rate
-        if rhr > 80:
-            insights.append(
-                f"Average resting heart rate ({rhr} bpm) is elevated. "
-                "Consider increasing aerobic activity or checking recovery."
-            )
-            conflicts.append(f"elevated_resting_hr: {rhr} bpm avg")
-        elif rhr < 60:
-            insights.append(
-                f"Average resting heart rate ({rhr} bpm) is in the athletic range."
-            )
-
-    if not insights:
-        insights.append(
-            "Not enough data in AlloyDB to run trend analysis. "
-            "Ask the user to sync their health data first via /health/sync."
-        )
-
-    confidence = min(0.95, 0.5 + 0.05 * len(sleep_sessions) + 0.05 * len(daily_metrics))
-
-    return json.dumps({
-        "insights": insights,
-        "conflicts": conflicts,
-        "confidence": round(confidence, 2),
-        "period_days": days,
-        "summary": summary.model_dump(),
-    }, default=str)
 
 
 async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
@@ -437,7 +273,7 @@ async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
     their health data. Do NOT call this for normal health queries — read from DB instead.
 
     Args:
-        user_id: The user's UUID string.
+        user_id: The user's email string.
         days:    Number of past days to re-fetch (default 30, max 90).
 
     Returns:
@@ -454,51 +290,30 @@ async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
 async def tool_get_agent_status(user_id: str) -> str:
     """
     Return a structured AgentResponse for the orchestrator.
-    This is the Health Agent's orchestrator contract — call this when another agent
-    or the orchestrator needs a standardized health status snapshot.
-    Reads from AlloyDB only. Always use this when the orchestrator requests a health update.
-
     Args:
-        user_id: The user's UUID string.
-
+        user_id: The user's email string.
     Returns:
         JSON string matching the AgentResponse schema.
     """
     if not _is_valid_user_id(user_id):
         return _json_error("user_id is required.")
+    print("Fetching data for user:", user_id)
     try:
-        summary = await build_health_summary(user_id, days=7)
-        trend_raw = await tool_analyze_health_trends(user_id, days=14)
-        trend_data = json.loads(trend_raw)
+        data = await get_health_summary(user_id)
+        print("DB result:", data)
     except Exception as exc:
         logger.exception("tool_get_agent_status failed user_id=%s", user_id)
         return _json_error("Failed to build agent status.", details=str(exc))
 
-    parts = []
-    if summary.avg_sleep_minutes:
-        parts.append(f"avg sleep {round(summary.avg_sleep_minutes / 60, 1)}h")
-    if summary.avg_steps:
-        parts.append(f"avg {int(summary.avg_steps):,} steps/day")
-    if summary.total_active_minutes:
-        parts.append(f"{summary.total_active_minutes} active mins total")
-    if summary.avg_resting_heart_rate:
-        parts.append(f"resting HR {summary.avg_resting_heart_rate} bpm")
-    one_line = (
-        f"Health (last 7d): {', '.join(parts)}."
-        if parts
-        else "Health: no data yet — user needs to sync."
-    )
-
+    one_line = f"Health data ready: extracted {len(data)} records."
+    
     response = AgentResponse(
         agent="health_agent",
         status=AgentStatus.OK,
         summary=one_line,
-        conflicts=trend_data.get("conflicts", []),
-        actions_taken=["build_health_summary", "tool_analyze_health_trends"],
         data={
-            "health_summary": summary.model_dump(),
-            "insights": trend_data.get("insights", []),
-            "confidence": trend_data.get("confidence", 0.5),
+            "health_summary": data,
+            "insight": generate_health_insight(data)
         },
     )
 
@@ -575,11 +390,7 @@ health_agent = Agent(
     ),
     instruction=HEALTH_AGENT_INSTRUCTION,
     tools=[
-        tool_get_sleep_from_db,
-        tool_get_activity_from_db,
-        tool_get_daily_metrics_from_db,
         tool_get_health_summary,
-        tool_analyze_health_trends,
         tool_sync_health_data,
         tool_get_agent_status,
     ],
@@ -589,84 +400,21 @@ health_agent = Agent(
 # ── Standalone Runner ──────────────────────────────────────────────────────────
 
 async def run_health_agent(message: str, user_id: str) -> AgentResponse:
-    """
-    Run the Health Agent directly (used for unit tests and the demo endpoint).
-    In production the orchestrator calls this agent via sub_agents=[health_agent].
-
-    Uses the official ADK Runner API:
-        Runner(agent=..., app_name=..., session_service=...)
-        session_service.create_session(app_name=..., user_id=...)
-        runner.run_async(user_id=..., session_id=..., new_message=types.Content(...))
-    """
     if not _is_valid_user_id(user_id):
         return _error_response("Missing required user_id.")
-    if not isinstance(message, str) or not message.strip():
-        return _error_response("Missing required message.")
-    if not _ADK_AVAILABLE:
-        return _error_response("google-adk dependency is not available.")
-
-    APP_NAME = "health_agent"
 
     try:
-        session_service = InMemorySessionService()
-        session = await session_service.create_session(
-            app_name=APP_NAME,
-            user_id=user_id,
+        raw_output = await tool_get_health_summary(user_id)
+        data = json.loads(raw_output)
+        
+        return AgentResponse(
+            agent="health_agent",
+            status=AgentStatus.OK,
+            summary="Health status retrieved.",
+            conflicts=[],
+            actions_taken=["get_health_summary"],
+            data=data
         )
-
-        runner = Runner(
-            agent=health_agent,
-            app_name=APP_NAME,
-            session_service=session_service,
-        )
-        # Prepend user_id so Gemini always knows which user to pass to tool functions.
-        # Without this, Gemini guesses or passes an empty string → DB returns 0 rows.
-        injected_message = f"[user_id: {user_id}]\n\n{message.strip()}"
-
-        new_message = genai_types.Content(
-            role="user",
-            parts=[genai_types.Part(text=injected_message)],
-        )
-
-        response_text = ""
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=new_message,
-        ):
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    response_text = event.content.parts[0].text
-                break
-
-        clean_text = _strip_code_fences(response_text)
-        try:
-            raw = json.loads(clean_text)
-            return AgentResponse(**raw)
-        except (json.JSONDecodeError, ValueError):
-            logger.warning(
-                "[run_health_agent] Non-JSON response from agent (after fence strip): %s",
-                clean_text[:300],
-            )
-            # If Gemini returned a valid AgentResponse wrapped in JSON inside a partial,
-            # try to extract it from the summary field too
-            try:
-                nested = json.loads(response_text)
-                if isinstance(nested, dict) and "summary" in nested:
-                    inner = _strip_code_fences(nested.get("summary", ""))
-                    inner_raw = json.loads(inner)
-                    return AgentResponse(**inner_raw)
-            except (json.JSONDecodeError, ValueError, AttributeError):
-                pass
-            return AgentResponse(
-                agent="health_agent",
-                status=AgentStatus.PARTIAL,
-                summary=clean_text[:500] if clean_text else "Health agent returned no response.",
-                conflicts=[],
-                actions_taken=["run_health_agent"],
-                data={"raw_response": clean_text},
-            )
-
     except Exception as exc:
-        logger.exception("Health agent error")
-        return _error_response(f"Health agent encountered an error: {exc}")
+        logger.exception("run_health_agent failed: %s", exc)
+        return _error_response(f"Health agent failed: {exc}")

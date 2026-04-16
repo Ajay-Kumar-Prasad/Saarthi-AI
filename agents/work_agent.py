@@ -229,123 +229,37 @@ def _detect_work_conflicts(tasks_data: dict, calendar_data: dict, gmail_data: di
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def run_work_agent(message: str, user_id: str) -> AgentResponse:
-    """
-    Entry point called by the orchestrator.
-    Uses direct tool dispatch (mock or real) for reliability.
-    ADK runner is available for natural language queries via the /work/chat route.
-    """
     invalid = _validate_inputs(message, user_id)
     if invalid:
         return invalid
 
     user_id = user_id.strip()
-    message = message.strip()
-
+    
     try:
-        # Run all three data fetches concurrently
-        tasks_data, calendar_data, gmail_data = await asyncio.gather(
-            _get_tasks_summary(user_id),
-            _get_calendar_summary(user_id),
-            _get_gmail_summary(user_id),
-            return_exceptions=True,
-        )
-
-        # Handle partial failures gracefully
-        partial_reasons = []
-        if isinstance(tasks_data, Exception):
-            logger.error("Tasks fetch failed: %s", tasks_data)
-            tasks_data = _empty_tasks_data()
-            partial_reasons.append("Tasks data unavailable.")
-
-        if isinstance(calendar_data, Exception):
-            logger.error("Calendar fetch failed: %s", calendar_data)
-            calendar_data = _empty_calendar_data()
-            partial_reasons.append("Calendar data unavailable.")
-
-        if isinstance(gmail_data, Exception):
-            logger.error("Gmail fetch failed: %s", gmail_data)
-            gmail_data = _empty_gmail_data()
-            partial_reasons.append("Gmail data unavailable.")
-
-        all_conflicts = _detect_work_conflicts(tasks_data, calendar_data, gmail_data)
-        message_lc = (message or "").lower()
-
-        # Intent routing based on user message
-        if "task" in message_lc:
-            summary = (
-                f"Task status: {len(tasks_data.get('tasks', []))} task(s), "
-                f"{tasks_data.get('high_priority_tasks', 0)} high-priority, "
-                f"{tasks_data.get('due_today', 0)} due today."
-            )
-            intent_conflicts = [c for c in all_conflicts if "task" in c.lower() or "overload" in c.lower()]
-            actions_taken = ["Fetched tasks from Google Tasks"]
-            response_data = {
-                "tasks": tasks_data.get("tasks", []),
-                "high_priority_tasks": tasks_data.get("high_priority_tasks", 0),
-                "due_today": tasks_data.get("due_today", 0),
-            }
-        elif "meeting" in message_lc or "calendar" in message_lc:
-            summary = (
-                f"Calendar status: {calendar_data.get('meetings_today', 0)} meeting(s) today, "
-                f"{len(calendar_data.get('back_to_back_warnings', []))} back-to-back warning(s)."
-            )
-            intent_conflicts = [c for c in all_conflicts if "meeting" in c.lower() or "calendar" in c.lower()]
-            actions_taken = ["Fetched calendar events from Google Calendar"]
-            response_data = {
-                "calendar_events": calendar_data.get("calendar_events", []),
-                "meetings_today": calendar_data.get("meetings_today", 0),
-                "back_to_back_warnings": calendar_data.get("back_to_back_warnings", []),
-            }
-        elif "email" in message_lc:
-            summary = f"Email status: {gmail_data.get('unread_count', 0)} unread email(s)."
-            intent_conflicts = [c for c in all_conflicts if "email" in c.lower() or "inbox" in c.lower()]
-            actions_taken = ["Fetched unread email count from Gmail"]
-            response_data = {
-                "unread_emails": gmail_data.get("unread_emails", []),
-                "unread_count": gmail_data.get("unread_count", 0),
-            }
-        else:
-            # Existing full-summary behavior
-            summary_parts = []
-            if tasks_data["high_priority_tasks"] > 0:
-                summary_parts.append(
-                    f"{tasks_data['high_priority_tasks']} high-priority task(s) pending"
-                )
-            if calendar_data["meetings_today"] > 0:
-                summary_parts.append(f"{calendar_data['meetings_today']} meeting(s) today")
-            if gmail_data["unread_count"] > 0:
-                summary_parts.append(f"{gmail_data['unread_count']} unread email(s)")
-
-            summary = (
-                "Work status: " + ", ".join(summary_parts) + "."
-                if summary_parts else
-                "No urgent work items found."
-            )
-            intent_conflicts = all_conflicts
-            actions_taken = [
-                "Fetched tasks from Google Tasks",
-                "Fetched calendar events from Google Calendar",
-                "Fetched unread email count from Gmail",
-            ]
-            response_data = {
-                **tasks_data,
-                **calendar_data,
-                **gmail_data,
-            }
-
-        if partial_reasons:
-            summary += f" Note: {' '.join(partial_reasons)}"
-
-        status = AgentStatus.PARTIAL if partial_reasons else AgentStatus.OK
-
+        from db.work_db import get_all_tasks
+        tasks = await get_all_tasks(user_id)
+        
+        total_tasks = len(tasks)
+        high_priority = len([t for t in tasks if t.get("priority") == "high"])
+        today_date = datetime.utcnow().date().isoformat()
+        due_today = len([
+            t for t in tasks
+            if str(t.get("due", "")).startswith(today_date)
+        ])
+        
+        insight = f"{total_tasks} tasks, {high_priority} high priority"
+        
         return _build_response(
-            status=status,
-            summary=summary,
-            conflicts=intent_conflicts,
-            actions_taken=actions_taken,
-            data=response_data,
+            status=AgentStatus.OK,
+            summary=insight,
+            actions_taken=["get_all_tasks"],
+            data={
+                "raw": {
+                    "tasks": tasks
+                },
+                "insight": insight
+            }
         )
-
     except Exception as exc:
         logger.exception("work_agent failed for user_id=%s", user_id)
         return _build_response(AgentStatus.ERROR, f"Work agent error: {exc}")

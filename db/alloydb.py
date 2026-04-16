@@ -13,18 +13,13 @@ import logging
 from typing import Any, Awaitable, Callable
 
 import asyncpg
-from google.auth import default
-from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.alloydb.connector import AsyncConnector
 
 from core.config import get_db_settings
 
 logger = logging.getLogger(__name__)
 
-_connector: AsyncConnector | None = None
 _pool: asyncpg.Pool | None = None
 _pool_lock = asyncio.Lock()
-_connector_lock = asyncio.Lock()
 
 _TRANSIENT_ERRORS = (
     asyncpg.PostgresConnectionError,
@@ -37,7 +32,6 @@ _TRANSIENT_ERRORS = (
 )
 
 _AUTH_ERRORS = (
-    DefaultCredentialsError,
     asyncpg.InvalidAuthorizationSpecificationError,
     asyncpg.InvalidPasswordError,
 )
@@ -123,53 +117,6 @@ async def _with_retries(
     raise RuntimeError(f"{operation} failed after {max_attempts} attempts: {last_exc}")
 
 
-async def _get_connector() -> AsyncConnector:
-    global _connector
-    if _connector is not None:
-        return _connector
-
-    async with _connector_lock:
-        if _connector is None:
-            credentials, _ = default()
-            _connector = AsyncConnector(credentials=credentials)
-            logger.info("Initialized AlloyDB async connector (IAM).")
-    return _connector
-
-
-async def _connect_via_iam() -> asyncpg.Connection:
-    settings = get_db_settings()
-    connector = await _get_connector()
-
-    if settings.debug:
-        logger.info(
-            "Attempting IAM AlloyDB connection instance=%s db=%s iam_user=%s",
-            settings.alloydb_instance_uri,
-            settings.alloydb_db,
-            settings.alloydb_iam_user,
-        )
-
-    try:
-        return await asyncio.wait_for(
-            connector.connect(
-                settings.alloydb_instance_uri,
-                "asyncpg",
-                user=settings.alloydb_iam_user,
-                db=settings.alloydb_db,
-                enable_iam_auth=True,
-            ),
-            timeout=settings.db_connect_timeout_seconds,
-        )
-    except asyncio.TimeoutError as exc:
-        logger.exception(
-            "IAM AlloyDB connection timed out after %.2fs",
-            settings.db_connect_timeout_seconds,
-        )
-        raise TimeoutError("IAM AlloyDB connection timed out.") from exc
-    except Exception:
-        logger.exception("IAM AlloyDB connection failed.")
-        raise
-
-
 async def _connect_direct() -> asyncpg.Connection:
     settings = get_db_settings()
     if settings.debug:
@@ -203,13 +150,10 @@ async def _create_pool() -> asyncpg.Pool:
 
     async def _connect(*args, **kwargs):
         del args, kwargs
-        if settings.mode == "iam":
-            return await _connect_via_iam()
         return await _connect_direct()
 
     logger.info(
-        "Creating AlloyDB pool mode=%s min_size=%d max_size=%d acquire_timeout=%.2fs",
-        settings.mode,
+        "Creating AlloyDB pool min_size=%d max_size=%d acquire_timeout=%.2fs",
         settings.db_pool_min_size,
         settings.db_pool_max_size,
         settings.db_pool_acquire_timeout_seconds,
@@ -307,14 +251,6 @@ async def close_pool() -> None:
 
 
 async def close_connector() -> None:
-    global _connector
-    if _connector is not None:
-        try:
-            maybe_coro = _connector.close()
-            if asyncio.iscoroutine(maybe_coro):
-                await maybe_coro
-        except Exception:
-            logger.exception("Failed to close AlloyDB IAM connector cleanly.")
-        finally:
-            _connector = None
-            logger.info("AlloyDB IAM connector closed.")
+    # Deprecated: IAM connector no longer in use
+    pass
+

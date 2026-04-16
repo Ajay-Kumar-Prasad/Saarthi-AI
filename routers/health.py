@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from agents.health_agent import run_health_agent, sync_all_health_data
-from db.health_db import build_health_summary
+from db.health_db import get_health_summary
 from db.schemas import AgentResponse, AgentStatus
 from routers.dependencies import ensure_agent_success
 from routers.schemas import ChatRequest, StatusRequest, SyncRequest
@@ -23,16 +23,16 @@ async def health_chat(req: ChatRequest):
 @router.post("/status", response_model=AgentResponse)
 async def health_status(req: StatusRequest):
     try:
-        summary = await build_health_summary(req.user_id, days=req.days)
+        summary = await get_health_summary(req.user_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch health status: {exc}") from exc
     return AgentResponse(
         agent="health_agent",
         status=AgentStatus.OK,
-        summary=f"Health summary generated for last {req.days} day(s).",
+        summary=f"Health summary generated.",
         conflicts=[],
-        actions_taken=["build_health_summary"],
-        data=summary.model_dump(),
+        actions_taken=["get_health_summary"],
+        data={"summary": summary},
     )
 
 

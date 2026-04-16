@@ -77,8 +77,11 @@ def _get_sheet():
 
 
 async def _safe_get_expenses(user_id: str) -> list[dict[str, Any]]:
+    print("Fetching data for user:", user_id)
     try:
-        return await get_all_expenses(user_id)
+        result = await get_all_expenses(user_id)
+        print("DB result:", result)
+        return result
     except Exception as exc:
         logger.exception("Failed to fetch expenses for user_id=%s", user_id)
         return []
@@ -151,7 +154,7 @@ async def _get_last_expense(user_id: str) -> tuple[str, list[str], dict[str, Any
 async def _get_spending_summary(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
     rows = await _safe_get_expenses(user_id)
     if not rows:
-        return "No expense data available.", [], {"summary": {}}
+        return "No expense data available.", [], {"expenses": [], "summary": {}}
 
     totals: dict[str, float] = {}
     for row in rows:
@@ -159,7 +162,20 @@ async def _get_spending_summary(user_id: str) -> tuple[str, list[str], dict[str,
         amount = float(row.get("amount") or 0.0)
         totals[category] = totals.get(category, 0.0) + amount
     summary_line = ", ".join(f"{k}: {v:.2f}" for k, v in totals.items())
-    return f"Spending summary: {summary_line}.", [], {"summary": totals}
+    expenses = [
+        {
+            "id": i,
+            "amount": float(r.get("amount") or 0.0),
+            "category": str(r.get("category") or "other"),
+            "description": str(r.get("description") or ""),
+            "expense_date": r["date"].isoformat() if hasattr(r.get("date"), "isoformat") else str(r.get("date")),
+        }
+        for i, r in enumerate(rows)
+    ]
+    return f"Spending summary: {summary_line}.", [], {
+        "raw": {"records": expenses, "summary": totals},
+        "insight": f"Identified spending across {len(totals)} categories: {summary_line}."
+    }
 
 
 async def _get_weekly_spending(user_id: str) -> tuple[str, list[str], dict[str, Any]]:
@@ -261,5 +277,5 @@ async def run_finance_agent(message: str, user_id: str) -> AgentResponse:
         summary=summary,
         actions_taken=[tool_name],
         conflicts=warnings,
-        data={"tool": tool_name, "args": args, "result": result_data},
+        data=result_data,
     )

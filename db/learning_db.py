@@ -8,7 +8,7 @@ These are called by learning_tools.py and the learning agent directly.
 import logging
 from datetime import datetime, timedelta, date
 import re
-from uuid import uuid4
+import secrets
 
 try:
     from db.alloydb import get_connection
@@ -25,8 +25,9 @@ MOCK_DB = os.getenv("MOCK_DB", "false").lower() == "true"
 
 # ── Learning Resources ────────────────────────────────────────────────────────
 
-async def get_all_resources(user_id: str, status: str | None = None) -> list[dict]:
-    """Fetch all learning resources for a user, optionally filtered by status."""
+async def get_all_resources(user_id: str) -> list[dict]:
+    """Fetch all learning resources for a user, no explicit SQL filtering."""
+    logger.info(f"[learning_db] querying for user_id: {user_id}")
     if MOCK_DB:
         resources = [
             {
@@ -40,45 +41,26 @@ async def get_all_resources(user_id: str, status: str | None = None) -> list[dic
                 "tags": ["python", "data-engineering"],
             }
         ]
-        if status:
-            return [r for r in resources if r.get("status") == status]
+        logger.info(f"[learning_db] resources={resources}")
         return resources
+        
     conn = await get_connection()
     try:
-        if status:
-            rows = await conn.fetch(
-                """
-                SELECT * FROM learning_resources
-                WHERE user_id = $1 AND status = $2
-                ORDER BY updated_at DESC
-                """,
-                user_id, status,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT * FROM learning_resources
-                WHERE user_id = $1
-                ORDER BY
-                    CASE status
-                        WHEN 'in_progress' THEN 1
-                        WHEN 'not_started' THEN 2
-                        WHEN 'paused'      THEN 3
-                        WHEN 'completed'   THEN 4
-                    END,
-                    updated_at DESC
-                """,
-                user_id,
-            )
-        return [dict(r) for r in rows]
+        rows = await conn.fetch(
+            "SELECT * FROM learning_resources WHERE user_id = $1 ORDER BY updated_at DESC",
+            user_id,
+        )
+        resources = [dict(r) for r in rows]
+        logger.info(f"[learning_db] resources={resources}")
+        return resources
     finally:
         await conn.close()
 
 
 async def add_resource(resource: LearningResource) -> dict:
     if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "user_id": resource.user_id, "title": resource.title, "resource_type": resource.resource_type, "status": "not_started", "progress_pct": 0, "tags": resource.tags}
+        
+        return {"id": str(secrets.token_hex(16)), "user_id": resource.user_id, "title": resource.title, "resource_type": resource.resource_type, "status": "not_started", "progress_pct": 0, "tags": resource.tags}
     """Insert a new learning resource and return the created row."""
     conn = await get_connection()
     try:
@@ -94,7 +76,7 @@ async def add_resource(resource: LearningResource) -> dict:
                  $11, $12)
             RETURNING *
             """,
-            str(uuid4()),
+            str(secrets.token_hex(16)),
             resource.user_id,
             resource.title,
             resource.resource_type,
@@ -146,26 +128,19 @@ async def update_resource_progress(
 
 # ── Study Sessions ────────────────────────────────────────────────────────────
 
-async def get_upcoming_sessions(user_id: str, days_ahead: int = 7) -> list[dict]:
-    """Fetch all upcoming study sessions within the next N days."""
+async def get_all_sessions(user_id: str) -> list[dict]:
+    """Fetch all study sessions securely without time filtering complexities in SQL."""
     if MOCK_DB:
         return []
     conn = await get_connection()
     try:
         rows = await conn.fetch(
-            """
-            SELECT ss.*, lr.title AS resource_title, lr.resource_type
-            FROM study_sessions ss
-            JOIN learning_resources lr ON lr.id = ss.resource_id
-            WHERE ss.user_id = $1
-              AND ss.scheduled_at BETWEEN now() AND now() + ($2 * INTERVAL '1 day')
-              AND ss.completed = false
-            ORDER BY ss.scheduled_at ASC
-            """,
+            "SELECT * FROM study_sessions WHERE user_id = $1 ORDER BY scheduled_at ASC",
             user_id,
-            days_ahead,
         )
-        return [dict(r) for r in rows]
+        sessions = [dict(r) for r in rows]
+        logger.info(f"[learning_db] sessions={sessions}")
+        return sessions
     finally:
         await conn.close()
 
@@ -192,7 +167,7 @@ async def create_study_session(session: StudySession) -> dict:
             DO NOTHING
             RETURNING *
             """,
-            str(uuid4()),
+            str(secrets.token_hex(16)),
             session.user_id,
             session.resource_id,
             session.title,
@@ -306,8 +281,8 @@ async def get_active_goals(user_id: str) -> list[dict]:
 
 async def create_study_goal(goal: StudyGoal) -> dict:
     if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "user_id": goal.user_id, "title": goal.title, "weekly_hours_target": goal.weekly_hours_target, "progress_pct": 0, "status": "active"}
+        
+        return {"id": str(secrets.token_hex(16)), "user_id": goal.user_id, "title": goal.title, "weekly_hours_target": goal.weekly_hours_target, "progress_pct": 0, "status": "active"}
     """Persist a new study goal."""
     conn = await get_connection()
     try:
@@ -319,7 +294,7 @@ async def create_study_goal(goal: StudyGoal) -> dict:
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
-            str(uuid4()),
+            str(secrets.token_hex(16)),
             goal.user_id,
             goal.resource_id,
             goal.title,
@@ -615,7 +590,7 @@ async def add_user_skill(
                     updated_at         = now()
             RETURNING *
             """,
-            str(uuid4()), user_id, skill_name, category,
+            str(secrets.token_hex(16)), user_id, skill_name, category,
             proficiency, verified, source_resource_id,
         )
         return dict(row)
@@ -736,7 +711,7 @@ async def create_flashcard(
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             """,
-            str(uuid4()), user_id, resource_id, question, answer,
+            str(secrets.token_hex(16)), user_id, resource_id, question, answer,
             tags or [],
         )
         return dict(row)
@@ -893,8 +868,8 @@ async def create_learning_path(
     """Create a new learning path (the container)."""
     conn = await get_connection()
     if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "user_id": user_id, "title": title, "target_role": target_role, "status": "active", "estimated_weeks": estimated_weeks, "created_at": "2026-04-04", "updated_at": "2026-04-04"}
+        
+        return {"id": str(secrets.token_hex(16)), "user_id": user_id, "title": title, "target_role": target_role, "status": "active", "estimated_weeks": estimated_weeks, "created_at": "2026-04-04", "updated_at": "2026-04-04"}
     try:
         row = await conn.fetchrow(
             """
@@ -903,7 +878,7 @@ async def create_learning_path(
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             """,
-            str(uuid4()), user_id, title, description,
+            str(secrets.token_hex(16)), user_id, title, description,
             target_role, estimated_weeks,
         )
         return dict(row)
@@ -948,8 +923,8 @@ async def add_path_step(
     """Add a step (resource) to an existing learning path."""
     conn = await get_connection()
     if MOCK_DB:
-        import uuid as _uuid
-        return {"id": str(_uuid.uuid4()), "path_id": path_id, "resource_id": resource_id, "step_order": step_order, "title": title, "why_this": why_this, "status": "pending", "estimated_hours": estimated_hours}
+        
+        return {"id": str(secrets.token_hex(16)), "path_id": path_id, "resource_id": resource_id, "step_order": step_order, "title": title, "why_this": why_this, "status": "pending", "estimated_hours": estimated_hours}
     try:
         row = await conn.fetchrow(
             """
@@ -962,7 +937,7 @@ async def add_path_step(
                     estimated_hours = EXCLUDED.estimated_hours
             RETURNING *
             """,
-            str(uuid4()), path_id, resource_id,
+            str(secrets.token_hex(16)), path_id, resource_id,
             step_order, title, why_this, estimated_hours,
         )
         return dict(row)

@@ -37,13 +37,21 @@ async def run_social_agent(message: str, user_id: str) -> AgentResponse:
         return invalid
 
     try:
-        # Placeholder implementation while social integrations are not wired yet.
-        logger.info("Social agent called for user_id=%s", user_id.strip())
+        from db.social_db import get_all_interactions
+        interactions = await get_all_interactions(user_id)
+        total = len(interactions)
+        
+        logger.info("Social agent called for user_id=%s, interactions=%s", user_id.strip(), total)
         return _build_response(
-            AgentStatus.PARTIAL,
-            "Social agent is available but domain integrations are not implemented yet.",
-            actions_taken=["validate_inputs"],
-            data={"message_received": message.strip()},
+            AgentStatus.OK,
+            f"{total} interactions found",
+            actions_taken=["get_all_interactions"],
+            data={
+                "raw": {
+                    "interactions": interactions
+                },
+                "insight": f"{total} interactions found"
+            },
         )
     except Exception as exc:
         logger.exception("Social agent execution failed user_id=%s", user_id)

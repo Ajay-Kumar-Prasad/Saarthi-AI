@@ -17,15 +17,9 @@ class Settings(BaseModel):
 
 
 class DBSettings(BaseModel):
-    mode: str = Field(default="iam")
     debug: bool = Field(default=False)
 
-    # IAM mode settings
-    alloydb_instance_uri: str = Field(default="")
-    alloydb_db: str = Field(default="")
-    alloydb_iam_user: str = Field(default="")
-
-    # Direct mode settings
+    # Direct DB connection settings
     db_host: str = Field(default="")
     db_port: int = Field(default=5432)
     db_user: str = Field(default="")
@@ -42,28 +36,11 @@ class DBSettings(BaseModel):
     db_retry_attempts: int = Field(default=3)
 
     def validate_for_startup(self) -> None:
-        mode = self.mode.lower().strip()
-        if mode not in {"iam", "direct"}:
-            raise ValueError("DB_CONNECTION_MODE must be either 'iam' or 'direct'.")
-
-        iam_fully_configured = bool(
-            self.alloydb_instance_uri and self.alloydb_db and self.alloydb_iam_user
-        )
         direct_fully_configured = bool(self.db_host and self.db_user and self.db_name)
 
-        if iam_fully_configured and direct_fully_configured:
+        if not direct_fully_configured:
             raise ValueError(
-                "Both IAM and direct DB credentials are fully configured. "
-                "Set exactly one strategy to avoid mixed connection behavior."
-            )
-
-        if mode == "iam" and not iam_fully_configured:
-            raise ValueError(
-                "IAM mode requires ALLOYDB_INSTANCE_URI, ALLOYDB_DB, and ALLOYDB_IAM_USER."
-            )
-        if mode == "direct" and not direct_fully_configured:
-            raise ValueError(
-                "Direct mode requires DB_HOST, DB_USER, and DB_NAME."
+                "Direct DB connection requires DB_HOST, DB_USER, and DB_NAME."
             )
 
         if self.db_pool_min_size < 1:
@@ -124,11 +101,7 @@ def get_settings() -> Settings:
 @lru_cache(maxsize=1)
 def get_db_settings() -> DBSettings:
     settings = DBSettings(
-        mode=os.getenv("DB_CONNECTION_MODE", "iam").strip().lower(),
         debug=_parse_bool_env("DB_DEBUG", default=False),
-        alloydb_instance_uri=os.getenv("ALLOYDB_INSTANCE_URI", "").strip(),
-        alloydb_db=os.getenv("ALLOYDB_DB", "").strip(),
-        alloydb_iam_user=os.getenv("ALLOYDB_IAM_USER", "").strip(),
         db_host=os.getenv("DB_HOST", "").strip(),
         db_port=int(os.getenv("DB_PORT", "5432").strip() or "5432"),
         db_user=os.getenv("DB_USER", "").strip(),

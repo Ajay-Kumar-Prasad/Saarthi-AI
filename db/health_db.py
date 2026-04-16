@@ -181,134 +181,19 @@ async def update_resting_heart_rate(user_id: str, hr_data: list[dict]) -> None:
 
 # ── Read helpers ──────────────────────────────────────────────────────────────
 
-async def get_sleep_summary_from_db(user_id: str, days: int = 7) -> list[SleepSession]:
-    """Read sleep sessions from AlloyDB for the last `days` days."""
+async def get_health_summary(user_id: str) -> list[dict]:
+    """Read health summary view from AlloyDB for the last 7 days."""
     conn = await get_connection()
     try:
         rows = await conn.fetch(
             """
-            SELECT date, start_time, end_time, duration_minutes, sleep_stages
-            FROM health_sleep_logs
+            SELECT * FROM user_health_summary
             WHERE user_id = $1
-              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
             ORDER BY date DESC
+            LIMIT 7;
             """,
-            user_id,
-            days,
+            user_id
         )
+        return [dict(row) for row in rows]
     finally:
         await conn.close()
-
-    return [
-        SleepSession(
-            date=str(row["date"]),
-            start_time=row["start_time"].isoformat() if row["start_time"] else None,
-            end_time=row["end_time"].isoformat() if row["end_time"] else None,
-            duration_minutes=row["duration_minutes"],
-            sleep_stages=json.loads(row["sleep_stages"]) if row["sleep_stages"] else None,
-        )
-        for row in rows
-    ]
-
-
-async def get_activity_summary_from_db(
-    user_id: str, days: int = 7
-) -> list[ActivitySession]:
-    """Read activity sessions from AlloyDB for the last `days` days."""
-    conn = await get_connection()
-    try:
-        rows = await conn.fetch(
-            """
-            SELECT date, activity_type, start_time, end_time, duration_minutes,
-                   calories_burned, steps, distance_meters, avg_heart_rate
-            FROM health_activity_logs
-            WHERE user_id = $1
-              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
-            ORDER BY date DESC
-            """,
-            user_id,
-            days,
-        )
-    finally:
-        await conn.close()
-
-    return [
-        ActivitySession(
-            date=str(row["date"]),
-            activity_type=row["activity_type"],
-            start_time=row["start_time"].isoformat() if row["start_time"] else None,
-            end_time=row["end_time"].isoformat() if row["end_time"] else None,
-            duration_minutes=row["duration_minutes"],
-            calories_burned=row["calories_burned"],
-            steps=row["steps"],
-            distance_meters=row["distance_meters"],
-            avg_heart_rate=row["avg_heart_rate"],
-        )
-        for row in rows
-    ]
-
-
-async def get_daily_metrics_from_db(user_id: str, days: int = 7) -> list[DailyMetrics]:
-    """Read daily metrics from DB for the last `days` days."""
-    conn = await get_connection()
-    try:
-        rows = await conn.fetch(
-            """
-            SELECT date, total_steps, total_calories, active_minutes, resting_heart_rate
-            FROM health_daily_metrics
-            WHERE user_id = $1
-              AND date::DATE >= CURRENT_DATE - ($2 * INTERVAL '1 day')
-            ORDER BY date DESC
-            """,
-            user_id,
-            days,
-        )
-        logger.info(f"Fetched daily metrics for {len(rows)} days for user {user_id}")
-    finally:
-        await conn.close()
-
-    return [
-        DailyMetrics(
-            date=str(row["date"]),
-            total_steps=row["total_steps"],
-            total_calories=row["total_calories"],
-            active_minutes=row["active_minutes"],
-            resting_heart_rate=row["resting_heart_rate"],
-        )
-        for row in rows
-    ]
-
-
-async def build_health_summary(user_id: str, days: int = 7) -> HealthSummary:
-    """
-    Aggregate all health data from AlloyDB into a single HealthSummary object.
-    Computes averages for sleep, steps, and heart rate across the period.
-    """
-    sleep_sessions   = await get_sleep_summary_from_db(user_id, days)
-    activity_sessions = await get_activity_summary_from_db(user_id, days)
-    daily_metrics    = await get_daily_metrics_from_db(user_id, days)
-
-    avg_sleep = (
-        round(sum(s.duration_minutes for s in sleep_sessions) / len(sleep_sessions), 1)
-        if sleep_sessions else None
-    )
-    steps_list  = [m.total_steps for m in daily_metrics if m.total_steps is not None]
-    avg_steps   = round(sum(steps_list) / len(steps_list), 0) if steps_list else None
-
-    hr_list  = [m.resting_heart_rate for m in daily_metrics if m.resting_heart_rate is not None]
-    avg_rhr  = round(sum(hr_list) / len(hr_list), 1) if hr_list else None
-
-    active_mins_list = [m.active_minutes for m in daily_metrics if m.active_minutes is not None]
-    total_active     = sum(active_mins_list) if active_mins_list else None
-
-    return HealthSummary(
-        user_id=user_id,
-        period_days=days,
-        sleep_sessions=sleep_sessions,
-        activity_sessions=activity_sessions,
-        daily_metrics=daily_metrics,
-        avg_sleep_minutes=avg_sleep,
-        avg_steps=avg_steps,
-        avg_resting_heart_rate=avg_rhr,
-        total_active_minutes=total_active,
-    )
