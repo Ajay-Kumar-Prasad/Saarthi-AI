@@ -50,7 +50,7 @@ export type HealthSummary = {
   activity_sessions: Array<Record<string, unknown>>
 }
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
+const USER_ID = "chjoshna145@gmail.com"
 
 async function requestAgent(path: string, init?: RequestInit): Promise<AgentResponse<JsonRecord | null>> {
   try {

@@ -5,7 +5,7 @@ import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
 import { postAgent } from "@/lib/api"
 import { AgentResponse, fallbackAgentResponse } from "@/types/agent"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
+const USER_ID = "chjoshna145@gmail.com"
 
 export default function WorkPage() {
   const [input, setInput] = useState("Show my work status")

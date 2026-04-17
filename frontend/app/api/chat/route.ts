@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        user_id: body.user_id ?? "00000000-0000-0000-0000-000000000001",
+        user_id: body.user_id ?? "chjoshna145@gmail.com",
         message: prompt,
         domains,
       }),

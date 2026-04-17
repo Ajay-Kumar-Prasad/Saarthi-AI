@@ -14,7 +14,7 @@ import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
 import { fetchLearningStatus, LearningStatus } from "@/lib/api"
 import { AgentResponse } from "@/types/agent"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
+const USER_ID = "chjoshna145@gmail.com"
 
 export default function LearningPage() {
   const [status, setStatus] = useState<LearningStatus | null>(null)

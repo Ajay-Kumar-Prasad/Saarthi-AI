@@ -11,7 +11,7 @@ import { fetchHealthStatus } from "@/lib/api"
 import { AgentResponse } from "@/types/agent"
 import { HealthSummary } from "@/lib/health-api"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
+const USER_ID = "chjoshna145@gmail.com"
 
 export default function HealthPage() {
   const [response, setResponse] = useState<AgentResponse | null>(null)

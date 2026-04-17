@@ -141,7 +141,7 @@ def _detect_role_from_text(text: str) -> str:
 # Each function must have a complete docstring — ADK uses it as the tool
 # description when deciding which function to call.
 
-async def tool_get_learning_status(user_id: str) -> str:
+async def tool_get_learning_status(user_id: str) -> dict:
     """
     Get a full snapshot of the user's current learning state.
     Returns active resources, upcoming study sessions, active goals,
@@ -193,20 +193,24 @@ async def tool_get_learning_status(user_id: str) -> str:
             insight = f"{len(resources)} resources and {len(sessions)} sessions available"
             
         logger.info("DB result: %s", raw_db)
-        return json.dumps({"raw": raw_db, "insight": insight}, default=str)
+        return {
+            "resources": resources,
+            "upcoming_sessions": sessions,
+            "active_goals": goals,
+            "weekly_hours_studied": round(weekly_hours, 1),
+            "streak_days": streak,
+            "insight": insight
+        }
     except Exception as exc:
         logger.error("tool_get_learning_status failed: %s", exc)
-        return json.dumps(
-            {
-                "error": "Failed to fetch learning status.",
-                "resources": [],
-                "upcoming_sessions": [],
-                "active_goals": [],
-                "weekly_hours_studied": 0,
-                "streak_days": 0,
-            },
-            default=str,
-        )
+        return {
+            "resources": [],
+            "upcoming_sessions": [],
+            "active_goals": [],
+            "weekly_hours_studied": 0,
+            "streak_days": 0,
+            "insight": "Failed to fetch learning data"
+        }
 
 
 async def tool_add_learning_resource(

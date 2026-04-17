@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react"
 import { postAgent } from "@/lib/api"
 import { AgentResponse } from "@/types/agent"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
+const USER_ID = "chjoshna145@gmail.com"
 
 type ExpenseInputProps = {
   onResponse: (response: AgentResponse) => void

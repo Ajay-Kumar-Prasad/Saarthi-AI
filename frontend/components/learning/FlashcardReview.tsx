@@ -5,15 +5,7 @@ import { api } from "@/lib/api"
 type Tab = "review" | "create"
 type Card = { question: string; answer: string; id?: string }
 
-function toUUID(id: string): string {
-  // If already UUID, return as is
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  if (uuidRegex.test(id)) return id
 
-  // Convert simple IDs like "5" → deterministic UUID
-  const padded = id.padStart(12, "0")
-  return `00000000-0000-0000-0000-${padded}`
-}
 async function createFlashcard(question: string, answer: string, resourceId: string) {
   return api.learning.chat(
     `Create a flashcard: question="${question}", answer="${answer}", resource_id=${resourceId}`,
@@ -162,8 +154,12 @@ function CreateTab({ onCreated }: { onCreated: () => void }) {
     setSaving(true)
     setMsg(null)
     try {
-      const uuidResourceId = toUUID(resourceId.trim())
-      const res = await createFlashcard(question.trim(), answer.trim(), uuidResourceId)
+  
+      const res = await createFlashcard(
+        question.trim(),
+        answer.trim(),
+        resourceId.trim()
+      )
       setMsg({ text: res?.summary ?? "Card created!", ok: true })
       setQuestion("")
       setAnswer("")
@@ -182,12 +178,11 @@ function CreateTab({ onCreated }: { onCreated: () => void }) {
 
       <div>
         <label className="text-gray-500 text-xs mb-1 block">Resource ID *</label>
-        <input
-          value={resourceId}
-          onChange={(e) => setResourceId(e.target.value)}
-          placeholder="e.g. 1"
-          className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500 transition-colors"
-        />
+        <select>
+          {resources.map(r => (
+            <option value={r.id}>{r.title}</option>
+          ))}
+        </select>
       </div>
 
       <div>

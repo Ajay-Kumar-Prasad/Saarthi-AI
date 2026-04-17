@@ -10,7 +10,7 @@ class Settings(BaseModel):
     app_version: str = Field(default="1.0.0")
     app_env: str = Field(default="development")
     app_log_level: str = Field(default="INFO")
-    default_user_id: str = Field(default="00000000-0000-0000-0000-000000000001")
+    default_user_id: str = Field(default="chjoshna145@gmail.com")
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["*"])
     cors_allow_methods: list[str] = Field(default_factory=lambda: ["*"])
     cors_allow_headers: list[str] = Field(default_factory=lambda: ["*"])
@@ -80,7 +80,7 @@ def get_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         app_log_level=os.getenv("APP_LOG_LEVEL", "INFO").upper(),
         default_user_id=os.getenv(
-            "DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001"
+            "DEFAULT_USER_ID", "chjoshna145@gmail.com"
         ),
         cors_allow_origins=_parse_csv_env("CORS_ALLOW_ORIGINS", ["*"]),
         cors_allow_methods=_parse_csv_env("CORS_ALLOW_METHODS", ["*"]),
