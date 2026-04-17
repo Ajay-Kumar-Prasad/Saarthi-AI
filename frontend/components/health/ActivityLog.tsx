@@ -1,20 +1,30 @@
 import type { ActivitySession } from "@/lib/health-api"
 import { format, parseISO } from "date-fns"
+import {
+  Activity,
+  Footprints,
+  Bike,
+  Waves,
+  Dumbbell,
+  Flame,
+  Mountain,
+  HeartPulse
+} from "lucide-react"
 
-const ACTIVITY_ICONS: Record<string, string> = {
-  running: "🏃",
-  cycling: "🚴",
-  yoga: "🧘",
-  walking: "🚶",
-  swimming: "🏊",
-  strength: "🏋️",
-  workout: "💪",
-  hiking: "🥾",
+const ACTIVITY_ICONS: Record<string, React.ElementType> = {
+  running: Activity,
+  cycling: Bike,
+  yoga: HeartPulse,
+  walking: Footprints,
+  swimming: Waves,
+  strength: Dumbbell,
+  workout: Flame,
+  hiking: Mountain,
 }
 
 function getIcon(type: string) {
   const key = type.toLowerCase()
-  return ACTIVITY_ICONS[key] ?? "⚡"
+  return ACTIVITY_ICONS[key] ?? Activity
 }
 
 function formatDuration(mins: number) {
@@ -26,7 +36,7 @@ function formatDuration(mins: number) {
 
 export default function ActivityLog({ sessions }: { sessions: ActivitySession[] }) {
   const sorted = [...sessions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8)
-
+  const Icon = getIcon(s.activity_type)
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
       <p className="text-gray-400 text-xs uppercase tracking-wide mb-4">Recent Activities</p>
@@ -40,7 +50,9 @@ export default function ActivityLog({ sessions }: { sessions: ActivitySession[] 
               className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0"
             >
               <div className="flex items-center gap-3">
-                <span className="text-xl">{getIcon(s.activity_type)}</span>
+                <span className="text-indigo-500">
+                  <Icon size={20} />
+                </span>
                 <div>
                   <p className="text-white text-sm font-medium capitalize">{s.activity_type}</p>
                   <p className="text-gray-500 text-xs">

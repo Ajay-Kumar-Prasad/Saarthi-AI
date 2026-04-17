@@ -1,4 +1,9 @@
 import type { HealthSummary } from "@/lib/health-api"
+import {
+  Footprints,
+  Flame,
+  Zap,
+} from "lucide-react"
 
 const STEP_GOAL = 10000
 
@@ -23,26 +28,47 @@ function StatCard({
   label: string
   value: string | number | null
   unit?: string
-  icon: string
+  icon: React.ElementType
   sub?: string
 }) {
+  const Icon = icon
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-gray-400 text-xs uppercase tracking-wide">{label}</p>
-        <span className="text-lg">{icon}</span>
+        <p className="text-gray-400 text-xs uppercase tracking-wide">
+          {label}
+        </p>
+
+        <span className="text-indigo-500">
+          <Icon size={18} />
+        </span>
       </div>
+
       <p className="text-white text-2xl font-semibold">
         {value !== null && value !== undefined ? (
           <>
-            {typeof value === "number" ? value.toLocaleString() : value}
-            {unit && <span className="text-gray-500 text-sm font-normal ml-1">{unit}</span>}
+            {typeof value === "number"
+              ? value.toLocaleString()
+              : value}
+            {unit && (
+              <span className="text-gray-500 text-sm font-normal ml-1">
+                {unit}
+              </span>
+            )}
           </>
         ) : (
-          <span className="text-gray-600 text-base">No data</span>
+          <span className="text-gray-600 text-base">
+            No data
+          </span>
         )}
       </p>
-      {sub && <p className="text-gray-500 text-xs mt-1">{sub}</p>}
+
+      {sub && (
+        <p className="text-gray-500 text-xs mt-1">
+          {sub}
+        </p>
+      )}
     </div>
   )
 }
@@ -55,38 +81,58 @@ export default function HealthStatCards({ data }: { data: HealthSummary }) {
   const activeValues = extractNumbers(metrics, (d) => d.active_minutes)
 
   const avgSteps =
-    stepsValues.length > 0 ? Math.round(sum(stepsValues) / stepsValues.length) : null
+    stepsValues.length > 0
+      ? Math.round(sum(stepsValues) / stepsValues.length)
+      : null
 
   const avgCalories =
-    caloriesValues.length > 0 ? Math.round(sum(caloriesValues) / caloriesValues.length) : null
+    caloriesValues.length > 0
+      ? Math.round(sum(caloriesValues) / caloriesValues.length)
+      : null
 
   const totalActiveMinutes =
     activeValues.length > 0 ? sum(activeValues) : null
 
   const stepsGoalPct =
-    avgSteps != null ? Math.min(Math.round((avgSteps / STEP_GOAL) * 100), 100) : null
+    avgSteps != null
+      ? Math.min(Math.round((avgSteps / STEP_GOAL) * 100), 100)
+      : null
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <StatCard
         label="Avg Daily Steps"
-        icon="👟"
+        icon={Footprints}
         value={avgSteps}
-        sub={stepsGoalPct != null ? `${stepsGoalPct}% of ${STEP_GOAL.toLocaleString()} goal` : undefined}
+        sub={
+          stepsGoalPct != null
+            ? `${stepsGoalPct}% of ${STEP_GOAL.toLocaleString()} goal`
+            : undefined
+        }
       />
+
       <StatCard
         label="Avg Calories Burned"
-        icon="🔥"
+        icon={Flame}
         value={avgCalories}
         unit="kcal/day"
-        sub={caloriesValues.length > 0 ? `based on ${caloriesValues.length} days` : undefined}
+        sub={
+          caloriesValues.length > 0
+            ? `based on ${caloriesValues.length} days`
+            : undefined
+        }
       />
+
       <StatCard
         label="Total Active Minutes"
-        icon="⚡"
+        icon={Zap}
         value={totalActiveMinutes}
         unit="min"
-        sub={activeValues.length > 0 ? `across ${activeValues.length} days` : undefined}
+        sub={
+          activeValues.length > 0
+            ? `across ${activeValues.length} days`
+            : undefined
+        }
       />
     </div>
   )

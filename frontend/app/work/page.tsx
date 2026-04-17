@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useState } from "react"
 import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
 import { AgentResponse } from "@/types/agent"
 import { fetchWorkStatus, postAgent } from "@/lib/api"
+import { ClipboardList, Flame, Clock } from "lucide-react"
 
 const USER_ID = "chjoshna145@gmail.com"
 
@@ -129,9 +130,9 @@ export default function WorkPage() {
       {/* Stats */}
       {response && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard label="Total Tasks" value={tasks.length} icon="📋" />
-          <StatCard label="High Priority" value={data.high_priority_tasks} icon="🔥" />
-          <StatCard label="Due Today" value={data.due_today} icon="⏰" />
+          <StatCard label="Total Tasks" value={tasks.length} icon={ClipboardList} />
+          <StatCard label="High Priority" value={data.high_priority_tasks} icon={Flame} />
+          <StatCard label="Due Today" value={data.due_today} icon={Clock} />
         </div>
       )}
 
@@ -197,14 +198,20 @@ function StatCard({
 }: {
   label: string
   value: number
-  icon: string
+  icon: React.ElementType
 }) {
+  const Icon = icon
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
       <p className="text-gray-400 text-xs">{label}</p>
+
       <div className="flex justify-between items-center mt-2">
         <p className="text-white text-xl font-semibold">{value}</p>
-        <span>{icon}</span>
+
+        <span className="text-indigo-500">
+          <Icon size={20} />
+        </span>
       </div>
     </div>
   )
