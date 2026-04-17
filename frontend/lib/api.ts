@@ -50,9 +50,39 @@ export type HealthSummary = {
   activity_sessions: Array<Record<string, unknown>>
 }
 
+export type WorkTask = {
+  id: number
+  user_id: string
+  title: string
+  status: "pending" | "in_progress" | "completed"
+  due_date?: string | null
+  created_at: string
+}
+
+export type WorkData = {
+  tasks: WorkTask[]
+  high_priority_tasks: number
+  due_today: number
+  insight: string
+}
+
+type HealthStatusData = {
+  daily_metrics: {
+    date: string
+    total_steps?: number | null
+    total_calories?: number | null
+    active_minutes?: number | null
+    resting_heart_rate?: number | null
+  }[]
+  activity_sessions: Record<string, unknown>[]
+}
+
 const USER_ID = "chjoshna145@gmail.com"
 
-async function requestAgent(path: string, init?: RequestInit): Promise<AgentResponse<JsonRecord | null>> {
+async function requestAgent(
+  path: string,
+  init?: RequestInit
+): Promise<AgentResponse<JsonRecord>> {
   try {
     const response = await fetch(path, {
       ...init,
@@ -61,16 +91,39 @@ async function requestAgent(path: string, init?: RequestInit): Promise<AgentResp
         ...(init?.headers ?? {}),
       },
     })
+
     const payload = (await response.json()) as unknown
+
     if (!isAgentResponse(payload)) {
-      return fallbackAgentResponse("frontend_proxy", "Invalid backend response format.")
+      return {
+        agent: "frontend_proxy",
+        status: "error",
+        summary: "Invalid backend response format.",
+        conflicts: [],
+        actions_taken: [],
+        data: {}, //  always object
+      }
     }
-    return payload as AgentResponse<JsonRecord | null>
+
+    //  force data to always be object
+    const safeData =
+      payload.data && typeof payload.data === "object"
+        ? payload.data
+        : {}
+
+    return {
+      ...payload,
+      data: safeData,
+    } as AgentResponse<JsonRecord>
   } catch (error) {
-    return fallbackAgentResponse(
-      "frontend_proxy",
-      error instanceof Error ? error.message : "Request failed.",
-    )
+    return {
+      agent: "frontend_proxy",
+      status: "error",
+      summary: error instanceof Error ? error.message : "Request failed.",
+      conflicts: [],
+      actions_taken: [],
+      data: {}, // consistent
+    }
   }
 }
 
@@ -116,14 +169,27 @@ export async function fetchLearningStatus(userId: string): Promise<AgentResponse
   }
 }
 
-export async function fetchHealthStatus(userId: string, days = 7): Promise<AgentResponse<HealthSummary | null>> {
-  const response = await postAgent("/api/health/status", { user_id: userId, days })
-  const data = (response.data ?? {}) as Partial<HealthSummary>
+export async function fetchHealthStatus(
+  userId: string,
+  days = 7
+): Promise<AgentResponse<HealthStatusData>> {
+  const response = await postAgent("/api/health/status", {
+    user_id: userId,
+    days,
+  })
+
+  // unwrap properly
+  const raw = (response.data?.health_summary ?? {}) as Record<string, unknown>
+
   return {
     ...response,
     data: {
-      daily_metrics: Array.isArray(data.daily_metrics) ? data.daily_metrics : [],
-      activity_sessions: Array.isArray(data.activity_sessions) ? data.activity_sessions : [],
+      daily_metrics: Array.isArray(raw.daily_metrics)
+        ? (raw.daily_metrics as HealthStatusData["daily_metrics"])
+        : [],
+      activity_sessions: Array.isArray(raw.activity_sessions)
+        ? (raw.activity_sessions as HealthStatusData["activity_sessions"])
+        : [],
     },
   }
 }
@@ -154,4 +220,71 @@ export const api = {
         note,
       }),
   },
+
+}
+function normalizeStatus(status: unknown): "pending" | "in_progress" | "completed" {
+  if (status === "pending") return "pending"
+  if (status === "in_progress") return "in_progress"
+  if (status === "completed") return "completed"
+  return "pending" // fallback (safe default)
+}
+export async function fetchWorkStatus(
+  userId: string
+): Promise<AgentResponse<WorkData>> {
+  const response = await postAgent("/api/work/chat", {
+    user_id: userId,
+    message: "show my work status",
+  })
+
+  const raw = response.data as Record<string, unknown>
+
+  //  sanitize tasks properly (not blindly cast)
+  const tasks: WorkTask[] = Array.isArray(raw?.tasks)
+    ? raw.tasks.map((t: any) => ({
+        id: Number(t?.id ?? 0),
+        user_id: String(t?.user_id ?? ""),
+        title: String(t?.title ?? ""),
+        status: normalizeStatus(t?.status),
+        due_date: t?.due_date ?? null,
+        created_at: String(t?.created_at ?? ""),
+      }))
+    : []
+
+  const data: WorkData = {
+    tasks,
+    high_priority_tasks:
+      typeof raw?.high_priority_tasks === "number"
+        ? raw.high_priority_tasks
+        : 0,
+    due_today:
+      typeof raw?.due_today === "number"
+        ? raw.due_today
+        : 0,
+    insight:
+      typeof raw?.insight === "string"
+        ? raw.insight
+        : "",
+  }
+
+  return {
+    ...response,
+    data,
+  }
+}
+
+export async function workChat(message: string) {
+  return postAgent("/api/work/chat", {
+    user_id: USER_ID,
+    message,
+  })
+}
+
+export async function createWorkTask(
+  userId: string,
+  title: string
+) {
+  return postAgent("/api/work/tasks/create", {
+    user_id: userId,
+    message: title,
+  })
 }

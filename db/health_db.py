@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from db.alloydb import get_connection
 from models.schemas import SleepSession, ActivitySession, DailyMetrics, HealthSummary
+from tools.google_fit import fetch_daily_metrics, fetch_activity_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -181,19 +182,33 @@ async def update_resting_heart_rate(user_id: str, hr_data: list[dict]) -> None:
 
 # ── Read helpers ──────────────────────────────────────────────────────────────
 
-async def get_health_summary(user_id: str) -> list[dict]:
-    """Read health summary view from AlloyDB for the last 7 days."""
-    conn = await get_connection()
+async def get_health_summary(user_id: str):
     try:
-        rows = await conn.fetch(
-            """
-            SELECT * FROM user_health_summary
-            WHERE user_id = $1
-            ORDER BY date DESC
-            LIMIT 7;
-            """,
-            user_id
-        )
-        return [dict(row) for row in rows]
-    finally:
-        await conn.close()
+        daily_rows = await fetch_daily_metrics(user_id)
+        activity_rows = await fetch_activity_sessions(user_id)
+
+        def safe_float(x):
+            try:
+                return float(x) if x is not None else None
+            except:
+                return None
+
+        summary = {
+            "daily_metrics": [
+                {
+                    "date": str(r.get("date")),
+                    "total_steps": r.get("total_steps") or 0,
+                    "total_calories": safe_float(r.get("total_calories")),
+                    "active_minutes": r.get("active_minutes") or 0,
+                    "resting_heart_rate": None,
+                }
+                for r in (daily_rows or [])
+            ],
+            "activity_sessions": activity_rows or [],
+        }
+
+        return summary
+
+    except Exception as e:
+        logger.error("Health summary error: %s", e)
+        raise Exception("Failed to build health summary")

@@ -1,5 +1,18 @@
 import type { HealthSummary } from "@/lib/health-api"
 
+const STEP_GOAL = 10000
+
+function extractNumbers<T>(
+  arr: T[],
+  selector: (item: T) => number | null | undefined
+): number[] {
+  return arr.map(selector).filter((v): v is number => v != null && v >= 0)
+}
+
+function sum(arr: number[]) {
+  return arr.reduce((a, b) => a + b, 0)
+}
+
 function StatCard({
   label,
   value,
@@ -35,21 +48,23 @@ function StatCard({
 }
 
 export default function HealthStatCards({ data }: { data: HealthSummary }) {
-  const metrics = data.daily_metrics ?? []
+  const metrics = Array.isArray(data.daily_metrics) ? data.daily_metrics : []
 
-  const stepsValues = metrics.map((d) => d.total_steps).filter((v): v is number => v != null)
-  const caloriesValues = metrics.map((d) => d.total_calories).filter((v): v is number => v != null)
-  const activeValues = metrics.map((d) => d.active_minutes).filter((v): v is number => v != null)
+  const stepsValues = extractNumbers(metrics, (d) => d.total_steps)
+  const caloriesValues = extractNumbers(metrics, (d) => d.total_calories)
+  const activeValues = extractNumbers(metrics, (d) => d.active_minutes)
 
   const avgSteps =
-    stepsValues.length > 0 ? Math.round(stepsValues.reduce((a, b) => a + b, 0) / stepsValues.length) : null
+    stepsValues.length > 0 ? Math.round(sum(stepsValues) / stepsValues.length) : null
+
   const avgCalories =
-    caloriesValues.length > 0 ? Math.round(caloriesValues.reduce((a, b) => a + b, 0) / caloriesValues.length) : null
+    caloriesValues.length > 0 ? Math.round(sum(caloriesValues) / caloriesValues.length) : null
+
   const totalActiveMinutes =
-    activeValues.length > 0 ? activeValues.reduce((a, b) => a + b, 0) : null
+    activeValues.length > 0 ? sum(activeValues) : null
 
   const stepsGoalPct =
-    avgSteps != null ? Math.min(Math.round((avgSteps / 10000) * 100), 100) : null
+    avgSteps != null ? Math.min(Math.round((avgSteps / STEP_GOAL) * 100), 100) : null
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -57,7 +72,7 @@ export default function HealthStatCards({ data }: { data: HealthSummary }) {
         label="Avg Daily Steps"
         icon="👟"
         value={avgSteps}
-        sub={stepsGoalPct != null ? `${stepsGoalPct}% of 10,000 goal` : undefined}
+        sub={stepsGoalPct != null ? `${stepsGoalPct}% of ${STEP_GOAL.toLocaleString()} goal` : undefined}
       />
       <StatCard
         label="Avg Calories Burned"

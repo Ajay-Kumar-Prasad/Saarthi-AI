@@ -257,10 +257,10 @@ async def tool_get_health_summary(user_id: str) -> str:
             data.append(row)
             
         logger.info("DB result: %s", data)
-        return json.dumps({
-            "raw": data,
+        return {
+            "health_summary": data,
             "insight": generate_health_insight(data)
-        }, default=str)
+        }
     except Exception as exc:
         logger.exception("tool_get_health_summary failed user_id=%s", user_id)
         return _json_error("Failed to build health summary.", details=str(exc))
@@ -284,7 +284,7 @@ async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
     days = _sanitize_days(days, default=30, max_days=30)
     result = await sync_all_health_data(user_id, days)
     logger.info(f"[tool_sync_health_data] manual sync triggered for user {user_id}")
-    return json.dumps(result, default=str)
+    return result
 
 
 async def tool_get_agent_status(user_id: str) -> str:
@@ -317,7 +317,7 @@ async def tool_get_agent_status(user_id: str) -> str:
         },
     )
 
-    return json.dumps(response.model_dump(), default=str)
+    return response.model_dump()
 
 
 # ── Agent Definition ───────────────────────────────────────────────────────────
@@ -404,8 +404,7 @@ async def run_health_agent(message: str, user_id: str) -> AgentResponse:
         return _error_response("Missing required user_id.")
 
     try:
-        raw_output = await tool_get_health_summary(user_id)
-        data = json.loads(raw_output)
+        data = await tool_get_health_summary(user_id)
         
         return AgentResponse(
             agent="health_agent",

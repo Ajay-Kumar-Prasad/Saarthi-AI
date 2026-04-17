@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
-from agents.health_agent import run_health_agent, sync_all_health_data
+from agents.health_agent import run_health_agent, sync_all_health_data, tool_get_health_summary, generate_health_insight
 from db.health_db import get_health_summary
 from db.schemas import AgentResponse, AgentStatus
 from routers.dependencies import ensure_agent_success
 from routers.schemas import ChatRequest, StatusRequest, SyncRequest
-
+from agents.learning_agent import normalize_agent_response  # reuse same normalizer
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -23,17 +23,15 @@ async def health_chat(req: ChatRequest):
 @router.post("/status", response_model=AgentResponse)
 async def health_status(req: StatusRequest):
     try:
-        summary = await get_health_summary(req.user_id)
+        raw = await tool_get_health_summary(req.user_id)
+        return normalize_agent_response(raw, "health_agent", "get_health_summary")
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch health status: {exc}") from exc
-    return AgentResponse(
-        agent="health_agent",
-        status=AgentStatus.OK,
-        summary=f"Health summary generated.",
-        conflicts=[],
-        actions_taken=["get_health_summary"],
-        data={"summary": summary},
-    )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch health status: {exc}"
+        ) from exc
 
 
 @router.post("/sync", response_model=AgentResponse)
@@ -48,7 +46,9 @@ async def health_sync(req: SyncRequest):
         summary=f"Health sync completed for {req.days} day(s).",
         conflicts=[],
         actions_taken=["sync_all_health_data"],
-        data={"synced": result},
+        data={
+            "sync_result": result
+        }
     )
 
 

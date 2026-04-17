@@ -41,8 +41,8 @@ function ReviewTab({
     setLoading(true)
     try {
       const res = await api.learning.flashcards()
-      const raw = (res?.data as Record<string, unknown>)?.cards
-      const list = Array.isArray(raw) ? (raw as Card[]) : []
+      const cards = res?.data?.flashcards
+      const list = Array.isArray(cards) ? (cards as Card[]) : []
       setCards(list)
       setCurrent(0)
       setFlipped(false)
@@ -178,11 +178,12 @@ function CreateTab({ onCreated }: { onCreated: () => void }) {
 
       <div>
         <label className="text-gray-500 text-xs mb-1 block">Resource ID *</label>
-        <select>
-          {resources.map(r => (
-            <option value={r.id}>{r.title}</option>
-          ))}
-        </select>
+        <input
+          value={resourceId}
+          onChange={(e) => setResourceId(e.target.value)}
+          placeholder="Enter resource ID (e.g. from a lesson)"
+          className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500 transition-colors"
+        />
       </div>
 
       <div>

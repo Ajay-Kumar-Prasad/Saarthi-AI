@@ -254,9 +254,9 @@ async def run_work_agent(message: str, user_id: str) -> AgentResponse:
             summary=insight,
             actions_taken=["get_all_tasks"],
             data={
-                "raw": {
-                    "tasks": tasks
-                },
+                "tasks": tasks,
+                "high_priority_tasks": high_priority,
+                "due_today": due_today,
                 "insight": insight
             }
         )

@@ -16,6 +16,8 @@ const SUGGESTIONS = [
 // Actions that likely mutate state — trigger a status refresh after these
 const MUTATING_KEYWORDS = ["schedule", "add", "create", "mark", "update", "log", "save", "complete"]
 
+const USER_ID = "chjoshna145@gmail.com"
+
 export default function ChatBox({ onAction }: { onAction?: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState("")

@@ -1,6 +1,6 @@
 export type AgentStatus = "ok" | "partial" | "error";
 
-export type AgentResponse<TData = Record<string, unknown> | null> = {
+export type AgentResponse<TData = Record<string, unknown>> = {
   agent: string;
   status: AgentStatus;
   summary: string;
@@ -12,13 +12,19 @@ export type AgentResponse<TData = Record<string, unknown> | null> = {
 export function isAgentResponse(value: unknown): value is AgentResponse {
   if (!value || typeof value !== "object") return false;
   const v = value as Partial<AgentResponse>;
+
+  const validStatus = ["ok", "partial", "error"];
+
   return (
     typeof v.agent === "string" &&
     typeof v.status === "string" &&
+    validStatus.includes(v.status) &&
     typeof v.summary === "string" &&
     Array.isArray(v.conflicts) &&
     Array.isArray(v.actions_taken) &&
-    "data" in v
+    typeof v.data === "object" &&
+    v.data !== null &&
+    !Array.isArray(v.data)
   );
 }
 
@@ -29,6 +35,6 @@ export function fallbackAgentResponse(agent: string, message: string): AgentResp
     summary: message,
     conflicts: [],
     actions_taken: [],
-    data: null,
+    data: {},
   };
 }

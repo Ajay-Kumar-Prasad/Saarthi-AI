@@ -1,12 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { postAgent } from "@/lib/api"
 
 interface Message {
   role: "user" | "agent"
   text: string
 }
+
+const USER_ID = "chjoshna145@gmail.com"
 
 const SUGGESTIONS = [
   "Show me my workouts",
@@ -19,18 +21,38 @@ export default function HealthChatBox() {
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
 
+  const bottomRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, loading])
+
   async function send(text: string) {
     if (!text.trim()) return
+
     const userMsg: Message = { role: "user", text: text.trim() }
     setMessages((prev) => [...prev, userMsg])
     setInput("")
     setLoading(true)
 
     try {
-      const response = await postAgent("/api/health/chat", { message: text.trim() })
-      setMessages((prev) => [...prev, { role: "agent", text: response.summary ?? "No response from agent." }])
-    } catch {
-      setMessages((prev) => [...prev, { role: "agent", text: "Unable to fetch data. Please try again." }])
+      const response = await postAgent("/api/health/chat", {
+        user_id: USER_ID,
+        message: text.trim(),
+      })
+
+      const reply =
+        typeof response.summary === "string" && response.summary.trim()
+          ? response.summary
+          : "No meaningful response from agent."
+
+      setMessages((prev) => [...prev, { role: "agent", text: reply }])
+    } catch (err) {
+      console.error("Health chat error:", err)
+      setMessages((prev) => [
+        ...prev,
+        { role: "agent", text: "Unable to fetch data. Please try again." },
+      ])
     } finally {
       setLoading(false)
     }
@@ -57,7 +79,7 @@ export default function HealthChatBox() {
       {messages.length > 0 && (
         <div className="space-y-3 max-h-56 overflow-y-auto pr-1">
           {messages.map((m, i) => (
-            <div key={i} className={`text-sm ${m.role === "user" ? "text-right" : ""}`}>
+            <div key={`${m.role}-${m.text}-${i}`} className={`text-sm ${m.role === "user" ? "text-right" : ""}`}>
               {m.role === "user" ? (
                 <span className="inline-block bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%] text-left">
                   {m.text}
@@ -71,9 +93,12 @@ export default function HealthChatBox() {
           ))}
           {loading && (
             <div className="text-sm">
-              <span className="inline-block bg-gray-800 text-gray-500 rounded-lg px-3 py-2">Thinking...</span>
+              <span className="inline-block bg-gray-800 text-gray-500 rounded-lg px-3 py-2">
+                Thinking...
+              </span>
             </div>
           )}
+          <div ref={bottomRef} />
         </div>
       )}
 
