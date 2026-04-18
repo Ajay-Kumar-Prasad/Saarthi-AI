@@ -40,7 +40,6 @@ export default function HealthPage() {
   const [response, setResponse] = useState<AgentResponse<HealthStatusData> | null>(null)
   const [loading, setLoading] = useState(true)
   const [connectedUserId, setConnectedUserId] = useState<string | null>(null)
-  const [emailInput, setEmailInput] = useState("")
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
@@ -63,7 +62,6 @@ export default function HealthPage() {
 
         if (cookieUserId) {
           setConnectedUserId(cookieUserId)
-          setEmailInput(cookieUserId)
         } else {
           setResponse(null)
           return
@@ -101,9 +99,6 @@ export default function HealthPage() {
 
   // ✅ Precompute
   const activitySessions = mapToActivitySessions(sessions)
-  const connectHref = emailInput.trim()
-    ? `/api/health/connect?user_id=${encodeURIComponent(emailInput.trim())}`
-    : null
 
   return (
     <div className="p-8 space-y-6">
@@ -121,48 +116,11 @@ export default function HealthPage() {
       )}
 
       {!loading && !isConnected && (
-        <div className="relative overflow-hidden rounded-3xl border border-amber-300/80 bg-[linear-gradient(135deg,rgba(251,191,36,0.2),rgba(255,251,235,0.95),rgba(253,230,138,0.35))] p-6 text-sm text-amber-950 shadow-[0_18px_60px_rgba(245,158,11,0.16)] dark:border-amber-700/60 dark:bg-[linear-gradient(135deg,rgba(120,53,15,0.95),rgba(41,37,36,0.96),rgba(120,53,15,0.88))] dark:text-amber-100">
-          <div className="pointer-events-none absolute inset-y-0 right-0 w-40 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.35),transparent_65%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.18),transparent_65%)]" />
-          <div className="relative">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-400/60 bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-700 dark:border-amber-600/50 dark:bg-black/20 dark:text-amber-300">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Health Access
-            </div>
-            <p className="text-lg font-semibold tracking-tight">Connect Google Fit to load your health dashboard.</p>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-amber-900/80 dark:text-amber-100/80">
-            Enter the email you want to connect, then continue to Google consent.
-            </p>
-            <div className="mt-5 flex flex-col gap-3 lg:flex-row">
-              <label className="group flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-amber-300/80 bg-white/90 px-4 py-3 shadow-sm transition-colors focus-within:border-amber-500 dark:border-amber-700/70 dark:bg-black/20">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
-                  @
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700/70 dark:text-amber-300/70">
-                    Google account email
-                  </div>
-                  <input
-                    type="email"
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    placeholder="you@example.com"
-                    className="mt-1 w-full border-0 bg-transparent p-0 text-sm text-gray-900 outline-none placeholder:text-amber-700/45 dark:text-white dark:placeholder:text-amber-200/35"
-                  />
-                </div>
-              </label>
-              <a
-                href={connectHref ?? "#"}
-                aria-disabled={!connectHref}
-                className={`inline-flex min-h-14 items-center justify-center rounded-2xl px-5 text-sm font-semibold transition-all ${
-                  connectHref
-                    ? "bg-amber-500 text-black shadow-[0_12px_30px_rgba(245,158,11,0.28)] hover:-translate-y-0.5 hover:bg-amber-400"
-                    : "pointer-events-none bg-amber-200 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
-                }`}
-              >
-                Connect Google Fit
-              </a>
-            </div>
-          </div>
+        <div className="rounded-3xl border border-dashed border-amber-300 bg-amber-50/80 p-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-100">
+          <p className="text-lg font-semibold tracking-tight">Google Fit isn&apos;t connected yet.</p>
+          <p className="mt-2 max-w-2xl leading-6 text-amber-900/80 dark:text-amber-100/80">
+            Use the Health Link section in the sidebar to connect the user account. Once consent is complete, this page will load their metrics automatically.
+          </p>
         </div>
       )}
 

@@ -4,9 +4,7 @@ import { proxyPost } from "@/app/api/_lib/proxy"
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
-  console.log("cookies",cookieStore)
   const cookieUserId = cookieStore.get("health_user_id")?.value
-  console.log("cookies user id",cookieUserId)
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const userId =
     typeof body.user_id === "string" && body.user_id.trim()
