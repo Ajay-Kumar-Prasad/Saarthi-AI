@@ -214,5 +214,5 @@ client_secret.json
 start.sh
 get_token.py
 *.json.bak
-gmail_credentials.json
 credentials.json
+gmail_credentials.json
