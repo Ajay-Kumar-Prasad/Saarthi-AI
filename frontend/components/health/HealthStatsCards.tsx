@@ -1,9 +1,5 @@
 import type { HealthSummary } from "@/lib/health-api"
-import {
-  Footprints,
-  Flame,
-  Zap,
-} from "lucide-react"
+import { Flame, Footprints, Zap, type LucideIcon } from "lucide-react"
 
 const STEP_GOAL = 10000
 
@@ -22,53 +18,32 @@ function StatCard({
   label,
   value,
   unit,
-  icon,
+  Icon,
   sub,
 }: {
   label: string
   value: string | number | null
   unit?: string
-  icon: React.ElementType
+  Icon: LucideIcon
   sub?: string
 }) {
-  const Icon = icon
-
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+    <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-gray-400 text-xs uppercase tracking-wide">
-          {label}
-        </p>
-
-        <span className="text-indigo-500">
-          <Icon size={18} />
-        </span>
+        <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</p>
+        <Icon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
       </div>
-
-      <p className="text-white text-2xl font-semibold">
+      <p className="text-2xl font-semibold text-gray-900 dark:text-white">
         {value !== null && value !== undefined ? (
           <>
-            {typeof value === "number"
-              ? value.toLocaleString()
-              : value}
-            {unit && (
-              <span className="text-gray-500 text-sm font-normal ml-1">
-                {unit}
-              </span>
-            )}
+            {typeof value === "number" ? value.toLocaleString() : value}
+            {unit && <span className="ml-1 text-sm font-normal text-gray-500 dark:text-gray-500">{unit}</span>}
           </>
         ) : (
-          <span className="text-gray-600 text-base">
-            No data
-          </span>
+          <span className="text-base text-gray-500 dark:text-gray-400">No data</span>
         )}
       </p>
-
-      {sub && (
-        <p className="text-gray-500 text-xs mt-1">
-          {sub}
-        </p>
-      )}
+      {sub && <p className="mt-1 text-xs text-gray-500 dark:text-gray-500">{sub}</p>}
     </div>
   )
 }
@@ -81,58 +56,38 @@ export default function HealthStatCards({ data }: { data: HealthSummary }) {
   const activeValues = extractNumbers(metrics, (d) => d.active_minutes)
 
   const avgSteps =
-    stepsValues.length > 0
-      ? Math.round(sum(stepsValues) / stepsValues.length)
-      : null
+    stepsValues.length > 0 ? Math.round(sum(stepsValues) / stepsValues.length) : null
 
   const avgCalories =
-    caloriesValues.length > 0
-      ? Math.round(sum(caloriesValues) / caloriesValues.length)
-      : null
+    caloriesValues.length > 0 ? Math.round(sum(caloriesValues) / caloriesValues.length) : null
 
   const totalActiveMinutes =
     activeValues.length > 0 ? sum(activeValues) : null
 
   const stepsGoalPct =
-    avgSteps != null
-      ? Math.min(Math.round((avgSteps / STEP_GOAL) * 100), 100)
-      : null
+    avgSteps != null ? Math.min(Math.round((avgSteps / STEP_GOAL) * 100), 100) : null
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <StatCard
         label="Avg Daily Steps"
-        icon={Footprints}
+        Icon={Footprints}
         value={avgSteps}
-        sub={
-          stepsGoalPct != null
-            ? `${stepsGoalPct}% of ${STEP_GOAL.toLocaleString()} goal`
-            : undefined
-        }
+        sub={stepsGoalPct != null ? `${stepsGoalPct}% of ${STEP_GOAL.toLocaleString()} goal` : undefined}
       />
-
       <StatCard
         label="Avg Calories Burned"
-        icon={Flame}
+        Icon={Flame}
         value={avgCalories}
         unit="kcal/day"
-        sub={
-          caloriesValues.length > 0
-            ? `based on ${caloriesValues.length} days`
-            : undefined
-        }
+        sub={caloriesValues.length > 0 ? `based on ${caloriesValues.length} days` : undefined}
       />
-
       <StatCard
         label="Total Active Minutes"
-        icon={Zap}
+        Icon={Zap}
         value={totalActiveMinutes}
         unit="min"
-        sub={
-          activeValues.length > 0
-            ? `across ${activeValues.length} days`
-            : undefined
-        }
+        sub={activeValues.length > 0 ? `across ${activeValues.length} days` : undefined}
       />
     </div>
   )

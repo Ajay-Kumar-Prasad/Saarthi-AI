@@ -44,12 +44,12 @@ type TooltipProps = {
 const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs">
-      <p className="text-gray-400 mb-1">{label}</p>
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-sm dark:border-gray-700 dark:bg-gray-900">
+      <p className="mb-1 text-gray-500 dark:text-gray-400">{label}</p>
       {payload.map((p) => (
         <p key={p.dataKey ?? p.name} style={{ color: p.color }}>
           {p.name}:{" "}
-          <span className="text-white font-medium">
+          <span className="font-medium text-gray-900 dark:text-white">
             {p.value?.toLocaleString()}
           </span>
         </p>
@@ -70,11 +70,11 @@ export default function StepsCaloriesChart({ metrics }: Props) {
 
   if (!data.length) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <p className="text-gray-400 text-xs uppercase tracking-wide mb-4">
+      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+        <p className="mb-4 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Steps & Calories
         </p>
-        <p className="text-gray-600 text-sm">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           No daily metric data available.
         </p>
       </div>
@@ -82,8 +82,8 @@ export default function StepsCaloriesChart({ metrics }: Props) {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <p className="text-gray-400 text-xs uppercase tracking-wide mb-4">
+    <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+      <p className="mb-4 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
         Steps & Calories — Daily
       </p>
 

@@ -3,7 +3,11 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 
-export default function SidebarHealthLink() {
+type SidebarHealthLinkProps = {
+  onStatusChange?: (status: { connected: boolean; userId: string | null }) => void
+}
+
+export default function SidebarHealthLink({ onStatusChange }: SidebarHealthLinkProps) {
   const [healthUserId, setHealthUserId] = useState<string | null>(null)
   const [healthConnected, setHealthConnected] = useState(false)
   const [emailInput, setEmailInput] = useState("")
@@ -25,15 +29,17 @@ export default function SidebarHealthLink() {
 
         setHealthConnected(Boolean(payload.connected && userId))
         setHealthUserId(userId)
+        onStatusChange?.({ connected: Boolean(payload.connected && userId), userId })
         if (userId) {
           setEmailInput(userId)
           window.localStorage.setItem("health_connect_email", userId)
         }
       } catch {
         setHealthConnected(false)
+        onStatusChange?.({ connected: false, userId: null })
       }
     })()
-  }, [])
+  }, [onStatusChange])
 
   const connectHref = emailInput.trim()
     ? `/api/health/connect?user_id=${encodeURIComponent(emailInput.trim())}`

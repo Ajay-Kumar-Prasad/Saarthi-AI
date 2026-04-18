@@ -2,10 +2,10 @@
 
 import type { WorkData, WorkTask as Task } from "@/lib/api"
 import { FormEvent, useEffect, useState } from "react"
+import { AlarmClock, ClipboardList, Flame, type LucideIcon } from "lucide-react"
 import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
 import { AgentResponse } from "@/types/agent"
 import { fetchWorkStatus, postAgent } from "@/lib/api"
-import { ClipboardList, Flame, Clock } from "lucide-react"
 
 const USER_ID = "chjoshna145@gmail.com"
 
@@ -19,14 +19,18 @@ function normalizeStatus(status: unknown): Task["status"] {
 function normalizeWorkData(raw: Record<string, unknown>): WorkData {
   return {
     tasks: Array.isArray(raw.tasks)
-      ? raw.tasks.map((t: any) => ({
-          id: Number(t?.id ?? 0),
-          user_id: String(t?.user_id ?? ""),
-          title: String(t?.title ?? ""),
-          status: normalizeStatus(t?.status),
-          due_date: t?.due_date ?? null,
-          created_at: String(t?.created_at ?? ""),
-        }))
+      ? raw.tasks.map((t) => {
+          const task = t as Record<string, unknown>
+
+          return {
+            id: Number(task.id ?? 0),
+            user_id: String(task.user_id ?? ""),
+            title: String(task.title ?? ""),
+            status: normalizeStatus(task.status),
+            due_date: typeof task.due_date === "string" ? task.due_date : null,
+            created_at: String(task.created_at ?? ""),
+          }
+        })
       : [],
     high_priority_tasks:
       typeof raw.high_priority_tasks === "number"
@@ -119,10 +123,10 @@ export default function WorkPage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold text-white">
+        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
           Work Agent Dashboard
         </h1>
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           Tasks, meetings, and productivity insights
         </p>
       </div>
@@ -130,27 +134,27 @@ export default function WorkPage() {
       {/* Stats */}
       {response && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard label="Total Tasks" value={tasks.length} icon={ClipboardList} />
-          <StatCard label="High Priority" value={data.high_priority_tasks} icon={Flame} />
-          <StatCard label="Due Today" value={data.due_today} icon={Clock} />
+          <StatCard label="Total Tasks" value={tasks.length} Icon={ClipboardList} />
+          <StatCard label="High Priority" value={data.high_priority_tasks} Icon={Flame} />
+          <StatCard label="Due Today" value={data.due_today} Icon={AlarmClock} />
         </div>
       )}
 
       {/* Task List */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <p className="text-gray-400 text-xs uppercase mb-3">Your Tasks</p>
+      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+        <p className="text-xs uppercase mb-3 text-gray-500 dark:text-gray-400">Your Tasks</p>
 
         {tasks.length === 0 ? (
-          <p className="text-gray-600 text-sm">No tasks found.</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">No tasks found.</p>
         ) : (
           <div className="space-y-3">
             {tasks.map((task) => (
               <div
                 key={task.id}
-                className="p-3 bg-gray-800 rounded-lg border border-gray-700"
+                className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800"
               >
-                <p className="text-white font-medium">{task.title}</p>
-                <p className="text-gray-400 text-xs">
+                <p className="font-medium text-gray-900 dark:text-white">{task.title}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
                   {task.status} •{" "}
                   {task.due_date ? task.due_date.slice(0, 10) : "No due date"}
                 </p>
@@ -163,15 +167,15 @@ export default function WorkPage() {
       {/* Chat */}
       <form
         onSubmit={onSubmit}
-        className="bg-gray-900 border border-gray-800 rounded-xl p-4"
+        className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
       >
-        <p className="text-sm text-gray-400 mb-2">Ask Work Agent</p>
+        <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">Ask Work Agent</p>
 
         <div className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 rounded-lg text-sm"
+            className="flex-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
           />
           <button
             type="submit"
@@ -194,24 +198,18 @@ export default function WorkPage() {
 function StatCard({
   label,
   value,
-  icon,
+  Icon,
 }: {
   label: string
   value: number
-  icon: React.ElementType
+  Icon: LucideIcon
 }) {
-  const Icon = icon
-
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-      <p className="text-gray-400 text-xs">{label}</p>
-
+    <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+      <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
       <div className="flex justify-between items-center mt-2">
-        <p className="text-white text-xl font-semibold">{value}</p>
-
-        <span className="text-indigo-500">
-          <Icon size={20} />
-        </span>
+        <p className="text-xl font-semibold text-gray-900 dark:text-white">{value}</p>
+        <Icon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
       </div>
     </div>
   )

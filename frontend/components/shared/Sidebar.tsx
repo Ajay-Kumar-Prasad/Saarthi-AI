@@ -1,7 +1,10 @@
 "use client"
+
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useState } from "react"
 import ThemeToggle from "./ThemeToggle"
+import SidebarHealthLink from "./SidebarHealthLink"
 import {
   LayoutDashboard,
   BookOpen,
@@ -22,6 +25,7 @@ const nav = [
 
 export default function Sidebar() {
   const path = usePathname()
+  const [connectedUserId, setConnectedUserId] = useState<string | null>(null)
 
   const isActive = (href: string) => {
     if (href === "/") return path === "/"
@@ -63,6 +67,12 @@ export default function Sidebar() {
         })}
       </nav>
 
+      <SidebarHealthLink
+        onStatusChange={({ connected, userId }) => {
+          setConnectedUserId(connected && userId ? userId : null)
+        }}
+      />
+
       <div className="px-1 mb-4">
         <ThemeToggle />
       </div>
@@ -73,8 +83,8 @@ export default function Sidebar() {
             S
           </div>
           <div>
-            <p className="text-gray-900 dark:text-white text-xs font-medium">
-              Saarthi User
+            <p className="text-gray-900 dark:text-white text-xs font-medium" suppressHydrationWarning>
+              {connectedUserId ?? "Saarthi User"}
             </p>
           </div>
         </div>
