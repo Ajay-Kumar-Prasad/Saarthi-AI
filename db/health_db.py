@@ -193,18 +193,28 @@ async def get_health_summary(user_id: str):
             except:
                 return None
 
+        def row_to_dict(r):
+            if hasattr(r, "model_dump"):
+                d = r.model_dump()
+            elif hasattr(r, "__dict__"):
+                d = dict(r.__dict__)
+            else:
+                d = dict(r)
+            return d
+
         summary = {
             "daily_metrics": [
                 {
-                    "date": str(r.get("date")),
-                    "total_steps": r.get("total_steps") or 0,
-                    "total_calories": safe_float(r.get("total_calories")),
-                    "active_minutes": r.get("active_minutes") or 0,
-                    "resting_heart_rate": None,
+                    "date": str(row.get("date")),
+                    "total_steps": row.get("total_steps") or 0,
+                    "total_calories": safe_float(row.get("total_calories")),
+                    "active_minutes": row.get("active_minutes") or 0,
+                    "resting_heart_rate": row.get("resting_heart_rate"),
                 }
                 for r in (daily_rows or [])
+                for row in [row_to_dict(r)]
             ],
-            "activity_sessions": activity_rows or [],
+            "activity_sessions": [row_to_dict(r) for r in (activity_rows or [])],
         }
 
         return summary

@@ -127,18 +127,18 @@ async function requestAgent(
   }
 }
 
-export async function postAgent(path: string, body: JsonRecord): Promise<AgentResponse<JsonRecord | null>> {
+export async function postAgent(path: string, body: JsonRecord): Promise<AgentResponse<JsonRecord>> {
   return requestAgent(path, {
     method: "POST",
     body: JSON.stringify(body),
   })
 }
 
-export async function getAgent(path: string): Promise<AgentResponse<JsonRecord | null>> {
+export async function getAgent(path: string): Promise<AgentResponse<JsonRecord>> {
   return requestAgent(path, { method: "GET" })
 }
 
-export async function deleteAgent(path: string): Promise<AgentResponse<JsonRecord | null>> {
+export async function deleteAgent(path: string): Promise<AgentResponse<JsonRecord>> {
   return requestAgent(path, { method: "DELETE" })
 }
 
@@ -154,7 +154,7 @@ function toGoalArray(value: unknown): Goal[] {
   return Array.isArray(value) ? (value as Goal[]) : []
 }
 
-export async function fetchLearningStatus(userId: string): Promise<AgentResponse<LearningStatus | null>> {
+export async function fetchLearningStatus(userId: string): Promise<AgentResponse<LearningStatus>> {
   const response = await postAgent("/api/learning/status", { user_id: userId })
   const data = (response.data ?? {}) as Partial<LearningStatus>
   return {
@@ -170,13 +170,15 @@ export async function fetchLearningStatus(userId: string): Promise<AgentResponse
 }
 
 export async function fetchHealthStatus(
-  userId: string,
+  userId?: string,
   days = 7
 ): Promise<AgentResponse<HealthStatusData>> {
-  const response = await postAgent("/api/health/status", {
-    user_id: userId,
-    days,
-  })
+  const body: JsonRecord = { days }
+  if (userId && userId.trim()) {
+    body.user_id = userId
+  }
+
+  const response = await postAgent("/api/health/status", body)
 
   // unwrap properly
   const raw = (response.data?.health_summary ?? {}) as Record<string, unknown>

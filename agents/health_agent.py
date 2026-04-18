@@ -248,18 +248,17 @@ async def tool_get_health_summary(user_id: str) -> str:
         return _json_error("user_id is required.")
     try:
         raw_db = await get_health_summary(user_id)
-        
-        data = []
-        for r in raw_db:
-            row = dict(r)
+
+        # get_health_summary returns {"daily_metrics": [...], "activity_sessions": [...]}
+        daily = raw_db.get("daily_metrics", []) if isinstance(raw_db, dict) else list(raw_db)
+        for row in daily:
             if row.get("total_calories") is not None:
                 row["total_calories"] = float(row["total_calories"])
-            data.append(row)
-            
-        logger.info("DB result: %s", data)
+
+        logger.info("DB result: %s", raw_db)
         return {
-            "health_summary": data,
-            "insight": generate_health_insight(data)
+            "health_summary": raw_db,
+            "insight": generate_health_insight(daily)
         }
     except Exception as exc:
         logger.exception("tool_get_health_summary failed user_id=%s", user_id)

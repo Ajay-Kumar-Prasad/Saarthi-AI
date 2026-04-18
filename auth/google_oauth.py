@@ -37,6 +37,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -104,6 +105,10 @@ async def google_callback(
     We exchange the code for access + refresh tokens and store them in AlloyDB.
     """
     if error:
+        if FRONTEND_URL:
+            return RedirectResponse(
+                url=f"{FRONTEND_URL}/health?error=oauth_failed"
+            )
         raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
 
     user_id = state
@@ -154,6 +159,11 @@ async def google_callback(
     from agents.health_agent import sync_all_health_data
     asyncio.create_task(sync_all_health_data(user_id, days=30))
     logger.info(f"Initial health data sync scheduled for user {user_id}")
+
+    if FRONTEND_URL:
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/api/health/connect/callback?user_id={user_id}&success=true"
+        )
 
     return {
         "message": (

@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any, Awaitable, Callable
+import ssl
+
 
 import asyncpg
 
@@ -130,15 +132,22 @@ async def _connect_direct() -> asyncpg.Connection:
         )
 
     try:
+        ssl_config = False
+        if settings.db_ssl:
+            ssl_config = ssl.create_default_context()
+            ssl_config.check_hostname = False
+            ssl_config.verify_mode = ssl.CERT_NONE
+
         return await asyncpg.connect(
             host=settings.db_host,
             port=settings.db_port,
             user=settings.db_user,
             password=settings.db_pass,
             database=settings.db_name,
-            ssl=settings.db_ssl,
+            ssl=ssl_config,
             timeout=settings.db_connect_timeout_seconds,
         )
+
     except Exception:
         logger.exception("Direct DB connection failed.")
         raise

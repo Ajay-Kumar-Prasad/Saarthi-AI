@@ -8,8 +8,6 @@ interface Message {
   text: string
 }
 
-const USER_ID = "chjoshna145@gmail.com"
-
 const SUGGESTIONS = [
   "Show me my workouts",
   "How many steps today?",
@@ -37,7 +35,6 @@ export default function HealthChatBox() {
 
     try {
       const response = await postAgent("/api/health/chat", {
-        user_id: USER_ID,
         message: text.trim(),
       })
 
