@@ -1,15 +1,20 @@
 "use client"
 
-import { ThemeProvider as NextThemesProvider } from "next-themes"
+import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
+import type { ReactNode } from "react"
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+export function ThemeProvider({ children }: { children: ReactNode }) {
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme="light"
+      defaultTheme="dark"
       enableSystem={false}
+      enableColorScheme={false}
+      storageKey="saarthi-theme"
     >
       {children}
     </NextThemesProvider>
   )
 }
+
+export { useTheme }

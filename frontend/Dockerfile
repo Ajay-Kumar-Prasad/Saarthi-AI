@@ -21,9 +21,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public /app/public
+COPY --from=builder /app/.next/standalone /app
+COPY --from=builder /app/.next/static /app/.next/static
 
 EXPOSE 8080
 
