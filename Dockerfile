@@ -1,30 +1,15 @@
-FROM node:20-alpine AS deps
+FROM python:3.12-slim
+
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci --legacy-peer-deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-FROM node:20-alpine AS builder
-WORKDIR /app
-
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN python -c "import main"
 
-ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
-
-FROM node:20-alpine AS runner
-WORKDIR /app
-
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
-ENV HOSTNAME=0.0.0.0
-
-COPY --from=builder /app/public /app/public
-COPY --from=builder /app/.next/standalone /app
-COPY --from=builder /app/.next/static /app/.next/static
 
 EXPOSE 8080
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]

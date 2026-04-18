@@ -58,12 +58,10 @@ except Exception:  # pragma: no cover
             return _S()
 
 from tools.google_fit import (
-    fetch_sleep_data,
     fetch_activity_sessions,
     fetch_daily_metrics,
 )
 from db.health_db import (
-    save_sleep_sessions,
     save_activity_sessions,
     save_daily_metrics,
     update_resting_heart_rate,
@@ -112,11 +110,11 @@ def _json_error(message: str, **extra) -> str:
 async def _safe_fetch_health_data(user_id: str, days: int) -> tuple[list, list, list, list[str]]:
     issues: list[str] = []
     sleep_sessions, activity_sessions, daily_metrics = [], [], []
-    try:
-        sleep_sessions = await fetch_sleep_data(user_id, days)
-    except Exception as exc:
-        logger.exception("Failed to fetch sleep data for user_id=%s", user_id)
-        issues.append(f"sleep_fetch_failed: {exc}")
+    # try:
+    #     sleep_sessions = await fetch_sleep_data(user_id, days)
+    # except Exception as exc:
+    #     logger.exception("Failed to fetch sleep data for user_id=%s", user_id)
+    #     issues.append(f"sleep_fetch_failed: {exc}")
     try:
         activity_sessions = await fetch_activity_sessions(user_id, days)
     except Exception as exc:
@@ -135,11 +133,11 @@ async def _safe_persist_health_data(
 ) -> tuple[int, int, int, list[str]]:
     issues: list[str] = []
     sleep_saved = activity_saved = metrics_saved = 0
-    try:
-        sleep_saved = await save_sleep_sessions(user_id, sleep_sessions)
-    except Exception as exc:
-        logger.exception("Failed to persist sleep data for user_id=%s", user_id)
-        issues.append(f"sleep_save_failed: {exc}")
+    # try:
+    #     sleep_saved = await save_sleep_sessions(user_id, sleep_sessions)
+    # except Exception as exc:
+    #     logger.exception("Failed to persist sleep data for user_id=%s", user_id)
+    #     issues.append(f"sleep_save_failed: {exc}")
     try:
         activity_saved = await save_activity_sessions(user_id, activity_sessions)
     except Exception as exc:
@@ -235,7 +233,121 @@ def generate_health_insight(data: list[dict]) -> str:
         
     return insight
 
-async def tool_get_health_summary(user_id: str) -> str:
+
+def build_health_summary_text(health_summary: dict) -> str:
+    daily = health_summary.get("daily_metrics", []) if isinstance(health_summary, dict) else []
+    activities = health_summary.get("activity_sessions", []) if isinstance(health_summary, dict) else []
+    period_days = health_summary.get("period_days") if isinstance(health_summary, dict) else None
+
+    if not isinstance(daily, list):
+        daily = []
+    if not isinstance(activities, list):
+        activities = []
+
+    insight = generate_health_insight(daily)
+
+    if period_days:
+        return f"{insight} across the last {period_days} days, with {len(activities)} recorded activities."
+
+    return f"{insight} with {len(activities)} recorded activities."
+
+
+def _build_metrics_answer(message: str, data: dict) -> str:
+    metrics = data.get("daily_metrics", []) if isinstance(data, dict) else []
+    if not isinstance(metrics, list) or not metrics:
+        return "No daily health metrics are available yet."
+
+    latest = metrics[0] if isinstance(metrics[0], dict) else {}
+    lowered = message.lower()
+
+    steps_values = [row.get("total_steps") or 0 for row in metrics if isinstance(row, dict)]
+    calories_values = [float(row.get("total_calories") or 0) for row in metrics if isinstance(row, dict)]
+    active_values = [row.get("active_minutes") or 0 for row in metrics if isinstance(row, dict)]
+    heart_rates = [
+        float(row.get("resting_heart_rate"))
+        for row in metrics
+        if isinstance(row, dict) and row.get("resting_heart_rate") is not None
+    ]
+
+    latest_date = latest.get("date", "the latest recorded day")
+
+    if "step" in lowered:
+        latest_steps = latest.get("total_steps") or 0
+        avg_steps = round(sum(steps_values) / len(steps_values)) if steps_values else 0
+        return f"You recorded {latest_steps:,} steps on {latest_date}. Your 7-day average is {avg_steps:,} steps per day."
+
+    if "calorie" in lowered:
+        latest_calories = float(latest.get("total_calories") or 0)
+        avg_calories = round(sum(calories_values) / len(calories_values)) if calories_values else 0
+        return f"You burned {latest_calories:.0f} calories on {latest_date}. Your 7-day average is about {avg_calories} calories per day."
+
+    if "active" in lowered:
+        latest_active = latest.get("active_minutes") or 0
+        total_active = sum(active_values)
+        return f"You logged {latest_active} active minutes on {latest_date}, with {total_active} active minutes across the last 7 days."
+
+    if "heart" in lowered:
+        if not heart_rates:
+            return "Resting heart rate data is not available in your recent health records yet."
+        latest_rhr = heart_rates[0]
+        avg_rhr = round(sum(heart_rates) / len(heart_rates), 1)
+        return f"Your latest recorded resting heart rate is {latest_rhr:.0f} bpm, and your recent average is {avg_rhr} bpm."
+
+    latest_steps = latest.get("total_steps") or 0
+    latest_active = latest.get("active_minutes") or 0
+    return f"On {latest_date}, you recorded {latest_steps:,} steps and {latest_active} active minutes."
+
+
+def _build_activity_answer(data: dict) -> str:
+    sessions = data.get("sessions", []) if isinstance(data, dict) else []
+    if not isinstance(sessions, list) or not sessions:
+        return "No activity sessions are available in your recent health data."
+
+    latest = sessions[0] if isinstance(sessions[0], dict) else {}
+    activity_type = str(latest.get("activity_type") or "activity")
+    duration = latest.get("duration_minutes") or 0
+    date = latest.get("date") or "the latest recorded day"
+    return f"Your latest recorded workout was {activity_type} on {date} for {duration} minutes. I found {len(sessions)} recent activity sessions."
+
+async def tool_get_activity_from_db(user_id: str, days: int = 7) -> dict:
+    """
+    Read the user's workout and activity sessions from AlloyDB-backed health summary data.
+    Use this when the user asks about workouts, exercise history, or activity levels.
+    """
+    if not _is_valid_user_id(user_id):
+        return {"error": "user_id is required."}
+
+    health_summary = await get_health_summary(user_id)
+    sessions = health_summary.get("activity_sessions", []) if isinstance(health_summary, dict) else []
+    safe_days = _sanitize_days(days, default=7, max_days=30)
+
+    return {
+        "sessions": sessions,
+        "count": len(sessions) if isinstance(sessions, list) else 0,
+        "period_days": safe_days,
+    }
+
+
+async def tool_get_daily_metrics_from_db(user_id: str, days: int = 7) -> dict:
+    """
+    Read daily aggregate metrics from AlloyDB-backed health summary data.
+    Use this when the user asks about steps, calories, active minutes, or heart rate.
+    """
+    if not _is_valid_user_id(user_id):
+        return {"error": "user_id is required."}
+
+    health_summary = await get_health_summary(user_id)
+    metrics = health_summary.get("daily_metrics", []) if isinstance(health_summary, dict) else []
+    safe_days = _sanitize_days(days, default=7, max_days=30)
+
+    return {
+        "daily_metrics": metrics,
+        "count": len(metrics) if isinstance(metrics, list) else 0,
+        "period_days": safe_days,
+    }
+
+
+async def tool_get_health_summary(user_id: str) -> dict:
     """
     Build a comprehensive health summary from AlloyDB data.
     Args:
@@ -255,14 +367,69 @@ async def tool_get_health_summary(user_id: str) -> str:
             if row.get("total_calories") is not None:
                 row["total_calories"] = float(row["total_calories"])
 
+        insight = generate_health_insight(daily)
+        summary = build_health_summary_text(raw_db)
+
         logger.info("DB result: %s", raw_db)
         return {
+            "summary": summary,
             "health_summary": raw_db,
-            "insight": generate_health_insight(daily)
+            "insight": insight
         }
     except Exception as exc:
         logger.exception("tool_get_health_summary failed user_id=%s", user_id)
         return _json_error("Failed to build health summary.", details=str(exc))
+
+
+async def tool_analyze_health_trends(user_id: str, days: int = 14) -> dict:
+    """
+    Analyze recent health trends from stored AlloyDB data and flag simple conflicts.
+    """
+    if not _is_valid_user_id(user_id):
+        return {"error": "user_id is required."}
+
+    health_summary = await get_health_summary(user_id)
+    daily = health_summary.get("daily_metrics", []) if isinstance(health_summary, dict) else []
+    activities = health_summary.get("activity_sessions", []) if isinstance(health_summary, dict) else []
+
+    insights: list[str] = []
+    conflicts: list[str] = []
+
+    total_steps = [row.get("total_steps") or 0 for row in daily if isinstance(row, dict)]
+    heart_rates = [row.get("resting_heart_rate") for row in daily if isinstance(row, dict) and row.get("resting_heart_rate") is not None]
+    active_minutes = [row.get("active_minutes") or 0 for row in daily if isinstance(row, dict)]
+
+    if total_steps:
+        avg_steps = round(sum(total_steps) / len(total_steps))
+        if avg_steps < 7500:
+            conflicts.append(f"low_step_count: avg {avg_steps} steps/day")
+            insights.append(f"Average daily steps are {avg_steps:,}, which is below the recommended 7,500-10,000 range.")
+        else:
+            insights.append(f"Average daily steps are {avg_steps:,}, which is a solid activity baseline.")
+
+    if heart_rates:
+        avg_rhr = round(sum(float(hr) for hr in heart_rates) / len(heart_rates), 1)
+        if avg_rhr > 80:
+            conflicts.append(f"elevated_resting_hr: {avg_rhr} bpm avg")
+            insights.append(f"Average resting heart rate is {avg_rhr} bpm, which looks elevated.")
+        else:
+            insights.append(f"Average resting heart rate is {avg_rhr} bpm.")
+
+    if active_minutes:
+        total_active = sum(active_minutes)
+        insights.append(f"Total active minutes recorded: {total_active}.")
+
+    if not insights:
+        insights.append("Not enough stored health data is available yet for trend analysis.")
+
+    safe_days = _sanitize_days(days, default=14, max_days=30)
+    return {
+        "summary": build_health_summary_text(health_summary),
+        "insights": insights,
+        "conflicts": conflicts,
+        "confidence": min(0.95, 0.5 + (len(daily) + len(activities)) * 0.02),
+        "period_days": safe_days,
+    }
 
 
 async def tool_sync_health_data(user_id: str, days: int = 30) -> str:
@@ -304,7 +471,7 @@ async def tool_get_agent_status(user_id: str) -> str:
         logger.exception("tool_get_agent_status failed user_id=%s", user_id)
         return _json_error("Failed to build agent status.", details=str(exc))
 
-    one_line = f"Health data ready: extracted {len(data)} records."
+    one_line = build_health_summary_text(data)
     
     response = AgentResponse(
         agent="health_agent",
@@ -312,11 +479,61 @@ async def tool_get_agent_status(user_id: str) -> str:
         summary=one_line,
         data={
             "health_summary": data,
-            "insight": generate_health_insight(data)
+            "insight": generate_health_insight(data.get("daily_metrics", []) if isinstance(data, dict) else [])
         },
     )
 
     return response.model_dump()
+
+
+async def _fallback_health_response(message: str, user_id: str, reason: str | None = None) -> AgentResponse:
+    lowered = message.lower()
+
+    if any(keyword in lowered for keyword in ("trend", "overall", "doing", "summary", "analyze")):
+        data = await tool_analyze_health_trends(user_id)
+        summary = data.get("summary") if isinstance(data, dict) else None
+        conflicts = data.get("conflicts", []) if isinstance(data, dict) else []
+        return AgentResponse(
+            agent="health_agent",
+            status=AgentStatus.PARTIAL if reason else AgentStatus.OK,
+            summary=summary or "Health trends retrieved from stored data.",
+            conflicts=conflicts if isinstance(conflicts, list) else [],
+            actions_taken=["tool_analyze_health_trends", "fallback_from_db"] if reason else ["tool_analyze_health_trends"],
+            data=data if isinstance(data, dict) else {"raw_response": data},
+        )
+
+    if any(keyword in lowered for keyword in ("workout", "activity", "exercise", "run", "cycling", "yoga")):
+        data = await tool_get_activity_from_db(user_id)
+        return AgentResponse(
+            agent="health_agent",
+            status=AgentStatus.PARTIAL if reason else AgentStatus.OK,
+            summary=_build_activity_answer(data if isinstance(data, dict) else {}),
+            conflicts=[],
+            actions_taken=["tool_get_activity_from_db", "fallback_from_db"] if reason else ["tool_get_activity_from_db"],
+            data=data if isinstance(data, dict) else {"raw_response": data},
+        )
+
+    if any(keyword in lowered for keyword in ("step", "calorie", "active", "heart")):
+        data = await tool_get_daily_metrics_from_db(user_id)
+        return AgentResponse(
+            agent="health_agent",
+            status=AgentStatus.PARTIAL if reason else AgentStatus.OK,
+            summary=_build_metrics_answer(message, data if isinstance(data, dict) else {}),
+            conflicts=[],
+            actions_taken=["tool_get_daily_metrics_from_db", "fallback_from_db"] if reason else ["tool_get_daily_metrics_from_db"],
+            data=data if isinstance(data, dict) else {"raw_response": data},
+        )
+
+    data = await tool_get_health_summary(user_id)
+    summary = data.get("summary") if isinstance(data, dict) else None
+    return AgentResponse(
+        agent="health_agent",
+        status=AgentStatus.PARTIAL if reason else AgentStatus.OK,
+        summary=summary or "Health summary retrieved from stored data.",
+        conflicts=[],
+        actions_taken=["get_health_summary", "fallback_from_db"] if reason else ["get_health_summary"],
+        data=data if isinstance(data, dict) else {"raw_response": data},
+    )
 
 
 # ── Agent Definition ───────────────────────────────────────────────────────────
@@ -324,7 +541,7 @@ async def tool_get_agent_status(user_id: str) -> str:
 HEALTH_AGENT_INSTRUCTION = """
 You are the Health Agent for Saarthi AI — a personal AI life operating system.
 
-Your mission: Help users understand and improve their physical health by analyzing their sleep, fitness activities, daily steps, calories, active minutes, and resting heart rate. All data is sourced from AlloyDB, which is populated from Google Fit during onboarding or when the user explicitly requests a sync.
+Your mission: Help users understand and improve their physical health by analyzing their fitness activities, daily steps, calories, active minutes, and resting heart rate. All data is sourced from AlloyDB, which is populated from Google Fit during onboarding or when the user explicitly requests a sync.
 
 USER IDENTIFICATION:
 Every message starts with a prefix: [user_id: <value>]
@@ -355,9 +572,7 @@ CONFLICT DETECTION — Always flag these:
 
 1. Average daily steps <7,500:
     "low_step_count: avg [X] steps/day"
-2. High-activity day (>60 active min) with <6h sleep:
-    "high_activity_low_sleep on [DATE]: active [X] min but only [Y]h sleep"
-3. Resting heart rate >80 bpm avg:
+2. Resting heart rate >80 bpm avg:
     "elevated_resting_hr: [X] bpm avg"
 
 RESPONSE FORMAT:
@@ -381,7 +596,7 @@ health_agent = Agent(
     name="health_agent",
     model="gemini-2.5-flash",
     description=(
-        "Manages the user's physical health — sleep tracking, fitness activities, "
+        "Manages the user's physical health —  fitness activities, "
         "step counts, calories, and heart rate. Reads from AlloyDB (populated during "
         "onboarding via Google Fit OAuth). Detects cross-domain health conflicts "
         "(e.g. insufficient recovery after high-intensity workouts). "
@@ -389,7 +604,10 @@ health_agent = Agent(
     ),
     instruction=HEALTH_AGENT_INSTRUCTION,
     tools=[
+        tool_get_activity_from_db,
+        tool_get_daily_metrics_from_db,
         tool_get_health_summary,
+        tool_analyze_health_trends,
         tool_sync_health_data,
         tool_get_agent_status,
     ],
@@ -399,20 +617,84 @@ health_agent = Agent(
 # ── Standalone Runner ──────────────────────────────────────────────────────────
 
 async def run_health_agent(message: str, user_id: str) -> AgentResponse:
+    """
+    Run the Health Agent directly (used for demo endpoint and orchestrator calls).
+    Prefer the ADK runner path so the model can interpret fetched data and answer
+    naturally. Fall back to DB-backed deterministic responses only when the live
+    model path is unavailable or fails at runtime.
+    """
     if not _is_valid_user_id(user_id):
         return _error_response("Missing required user_id.")
 
+    if not isinstance(message, str) or not message.strip():
+        return _error_response("Missing required message.")
+
+    if not _ADK_AVAILABLE:
+        try:
+            return await _fallback_health_response(message, user_id)
+        except Exception as exc:
+            logger.exception("run_health_agent fallback failed: %s", exc)
+            return _error_response(f"Health agent failed: {exc}")
+
+    app_name = "health_agent"
+    session_service = InMemorySessionService()
+
     try:
-        data = await tool_get_health_summary(user_id)
-        
-        return AgentResponse(
-            agent="health_agent",
-            status=AgentStatus.OK,
-            summary="Health status retrieved.",
-            conflicts=[],
-            actions_taken=["get_health_summary"],
-            data=data
+        session = await session_service.create_session(
+            app_name=app_name,
+            user_id=user_id,
         )
+
+        runner = Runner(
+            agent=health_agent,
+            app_name=app_name,
+            session_service=session_service,
+        )
+
+        injected_message = f"[user_id: {user_id}]\n\n{message.strip()}"
+        new_message = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=injected_message)],
+        )
+
+        response_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=new_message,
+        ):
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    response_text = event.content.parts[0].text or ""
+                break
+
+        clean_text = _strip_code_fences(response_text)
+        try:
+            raw = json.loads(clean_text)
+            return AgentResponse(**raw)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            try:
+                nested = json.loads(response_text)
+                if isinstance(nested, dict) and "summary" in nested:
+                    inner = _strip_code_fences(str(nested.get("summary", "")))
+                    inner_raw = json.loads(inner)
+                    return AgentResponse(**inner_raw)
+            except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+                pass
+
+            logger.warning("Health agent returned non-AgentResponse text: %s", clean_text[:300])
+            return AgentResponse(
+                agent="health_agent",
+                status=AgentStatus.PARTIAL,
+                summary=clean_text[:500] if clean_text else "Health agent returned no response.",
+                conflicts=[],
+                actions_taken=["run_health_agent"],
+                data={"raw_response": clean_text},
+            )
     except Exception as exc:
         logger.exception("run_health_agent failed: %s", exc)
-        return _error_response(f"Health agent failed: {exc}")
+        try:
+            return await _fallback_health_response(message, user_id, reason=str(exc))
+        except Exception as fallback_exc:
+            logger.exception("run_health_agent fallback after ADK failure also failed: %s", fallback_exc)
+            return _error_response(f"Health agent failed: {exc}")
