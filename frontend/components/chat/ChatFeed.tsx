@@ -7,7 +7,7 @@ type Message = {
   role: "user" | "assistant"
   content: string
   agents?: string[]
-  proof?: any
+  proof?: Record<string, unknown>
 }
 
 type ChatFeedProps = {

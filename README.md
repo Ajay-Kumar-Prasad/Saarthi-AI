@@ -15,7 +15,9 @@
 
 **Built for GenAI Academy APAC Edition 2026 · Hack2skill × Google Cloud**
 
-[Demo](#demo) · [Architecture](#architecture) · [Quickstart](#quickstart) · [Team](#team)
+[Demo Drive Link](https://drive.google.com/drive/folders/1_7hjDB4TYm9sE0-AdQYYO52XLZDYNthP?usp=sharing) · [Architecture](#architecture) · [Quickstart](#quickstart) · [Team](#team)
+
+[Cloud Run Link:](https://mediquery-ai-318808090470.us-central1.run.app/)
 
 </div>
 

@@ -1,107 +1,246 @@
-"use client";
+"use client"
 
-import { useState } from "react";
-import ExpenseInput from "@/components/finance/ExpenseInput";
-import SpendingChart from "@/components/finance/SpendingChart";
-import ExpenseFeed from "@/components/finance/ExpenseFeed";
-import GmailSyncButton from "@/components/finance/GmailSyncButton";
+import { useState, useEffect } from "react"
+import ExpenseFeed from "@/components/finance/ExpenseFeed"
+import ExpenseInput from "@/components/finance/ExpenseInput"
+import GmailSyncButton from "@/components/finance/GmailSyncButton"
+import SpendingChart from "@/components/finance/SpendingChart"
+import AgentResponsePanel from "@/components/shared/AgentResponsePanel"
+import { getAgent, postAgent } from "@/lib/api"
+import { AgentResponse } from "@/types/agent"
+
+type ExpenseRow = {
+  id?: string | number
+  category?: string
+  amount?: number
+  expense_date?: string
+  description?: string
+}
+
+type CategoryTotal = {
+  category: string
+  total: number
+}
+
+/* -------------------- Helpers -------------------- */
+
+function asExpenses(response: AgentResponse | null): ExpenseRow[] {
+  const payload = response?.data as Record<string, unknown> | null | undefined
+  const list = payload?.expenses
+  return Array.isArray(list) ? (list as ExpenseRow[]) : []
+}
+
+function asSummary(response: AgentResponse | null): CategoryTotal[] {
+  const payload = response?.data as Record<string, unknown> | null | undefined
+  const summary = payload?.summary
+  if (!Array.isArray(summary)) return []
+  return summary
+    .map((row) => {
+      const item = row as Record<string, unknown>
+      const category = typeof item.category === "string" ? item.category : ""
+      const total = typeof item.total === "number" ? item.total : 0
+      return { category, total }
+    })
+    .filter((row) => row.category.length > 0)
+}
+
+function getTotalSpend(summary: CategoryTotal[]) {
+  return summary.reduce((acc, curr) => acc + curr.total, 0)
+}
+
+function getTopCategory(summary: CategoryTotal[]) {
+  if (!summary.length) return null
+  return summary.reduce((max, curr) =>
+    curr.total > max.total ? curr : max
+  )
+}
+
+function getAvgExpense(expenses: ExpenseRow[]) {
+  if (!expenses.length) return 0
+  const total = expenses.reduce((sum, e) => sum + (e.amount ?? 0), 0)
+  return Math.round(total / expenses.length)
+}
+
+/* -------------------- Component -------------------- */
 
 export default function FinancePage() {
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [activeResponse, setActiveResponse] = useState<AgentResponse | null>(null)
+  const [syncResponse, setSyncResponse] = useState<AgentResponse | null>(null)
+  const [expensesResponse, setExpensesResponse] = useState<AgentResponse | null>(null)
+  const [summaryResponse, setSummaryResponse] = useState<AgentResponse | null>(null)
+  const [loading, setLoading] = useState<"idle" | "expenses" | "summary" | "sync">("idle")
 
-  const handleSaved = () => setRefreshKey((k) => k + 1);
+  /* 🔥 AUTO LOAD DATA */
+  useEffect(() => {
+    async function init() {
+      setLoading("expenses")
+
+      try {
+        const [expensesRes, summaryRes] = await Promise.all([
+          getAgent("/api/finance/expenses"),
+          getAgent("/api/finance/summary"),
+        ])
+
+        setExpensesResponse(expensesRes)
+        setSummaryResponse(summaryRes)
+        setActiveResponse(summaryRes)
+      } finally {
+        setLoading("idle")
+      }
+    }
+
+    init()
+  }, [])
+
+  async function refreshExpenses() {
+    setLoading("expenses")
+    const response = await getAgent("/api/finance/expenses")
+    setExpensesResponse(response)
+    setActiveResponse(response)
+    setLoading("idle")
+  }
+
+  async function refreshSummary() {
+    setLoading("summary")
+    const response = await getAgent("/api/finance/summary")
+    setSummaryResponse(response)
+    setActiveResponse(response)
+    setLoading("idle")
+  }
+
+  function handleChatResponse(response: AgentResponse) {
+    setActiveResponse(response)
+  }
+
+  function handleSyncResponse(response: AgentResponse) {
+    setSyncResponse(response)
+    setActiveResponse(response)
+    setLoading("idle")
+  }
+
+  async function syncGmail() {
+    setLoading("sync")
+    const response = await postAgent("/api/finance/sync-gmail", {})
+    handleSyncResponse(response)
+  }
+
+  const expenses = asExpenses(expensesResponse)
+  const summary = asSummary(summaryResponse)
+
+  const totalSpend = getTotalSpend(summary)
+  const topCategory = getTopCategory(summary)
+  const avgExpense = getAvgExpense(expenses)
 
   return (
-    <main className="finance-root">
-      <div className="finance-header">
-        <div className="header-left">
-          <span className="header-label">SAARTHI / FINANCE</span>
-          <h1 className="header-title">Expense Ledger</h1>
-        </div>
-        <div className="header-right">
-          <GmailSyncButton onSynced={handleSaved} />
-        </div>
+    <div className="space-y-6 p-8">
+
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
+          Finance Agent
+        </h1>
+        <p className="text-sm text-gray-500">
+          Track expenses, analyze spending, and sync transactions.
+        </p>
       </div>
 
-      <div className="finance-grid">
-        {/* Left column: input + feed */}
-        <div className="col-left">
-          <ExpenseInput onSaved={handleSaved} />
-          <ExpenseFeed refreshKey={refreshKey} />
-        </div>
+      {/* 🔥 Analytics Cards */}
+      {summary.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
-        {/* Right column: chart */}
-        <div className="col-right">
-          <SpendingChart refreshKey={refreshKey} />
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+            <p className="text-xs text-gray-500">Total Spend</p>
+            <p className="text-xl font-semibold text-gray-900 dark:text-white">
+              ₹{totalSpend.toLocaleString()}
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+            <p className="text-xs text-gray-500">Top Category</p>
+            <p className="text-xl font-semibold text-indigo-600 dark:text-indigo-400">
+              {topCategory?.category ?? "—"}
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+            <p className="text-xs text-gray-500">Avg Expense</p>
+            <p className="text-xl font-semibold text-gray-900 dark:text-white">
+              ₹{avgExpense.toLocaleString()}
+            </p>
+          </div>
+
         </div>
+      )}
+
+      {/* Input */}
+      <ExpenseInput onResponse={handleChatResponse} />
+
+      {/* Actions (now refresh, not load) */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={refreshExpenses}
+          disabled={loading !== "idle"}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          {loading === "expenses" ? "Refreshing..." : "Refresh Expenses"}
+        </button>
+
+        <button
+          onClick={refreshSummary}
+          disabled={loading !== "idle"}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          {loading === "summary" ? "Refreshing..." : "Refresh Summary"}
+        </button>
+
+        <GmailSyncButton
+          loading={loading === "sync"}
+          onClick={syncGmail}
+        />
       </div>
 
-      <style jsx>{`
-        .finance-root {
-          min-height: 100vh;
-          background: #0a0a0a;
-          color: #e8e8e0;
-          font-family: "IBM Plex Mono", "Courier New", monospace;
-          padding: 0 0 4rem 0;
-        }
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
 
-        .finance-header {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          padding: 2.5rem 2.5rem 1.5rem;
-          border-bottom: 1px solid #1e1e1e;
-          background: #0a0a0a;
-          position: sticky;
-          top: 0;
-          z-index: 10;
-        }
+        <ExpenseFeed
+          expenses={expenses}
+          loading={loading === "expenses"}
+        />
 
-        .header-label {
-          display: block;
-          font-size: 0.65rem;
-          letter-spacing: 0.2em;
-          color: #3a3a3a;
-          margin-bottom: 0.4rem;
-        }
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5">
+          <p className="text-sm text-gray-500 mb-3">
+            Category Breakdown
+          </p>
+          <SpendingChart
+            data={summary}
+            loading={loading === "summary"}
+          />
+        </div>
 
-        .header-title {
-          font-size: 1.6rem;
-          font-weight: 400;
-          letter-spacing: -0.02em;
-          color: #e8e8e0;
-          margin: 0;
-        }
+      </div>
 
-        .finance-grid {
-          display: grid;
-          grid-template-columns: 1fr 1.2fr;
-          gap: 0;
-          min-height: calc(100vh - 100px);
-        }
+      {/* Response Panel */}
+      {activeResponse ? (
+        <AgentResponsePanel
+          title="Finance Agent Response"
+          response={activeResponse}
+        />
+      ) : (
+        <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-6 text-center">
+          <p className="text-gray-500 text-sm">
+            Start by asking the Finance Agent something useful.
+          </p>
+        </div>
+      )}
 
-        .col-left {
-          border-right: 1px solid #1a1a1a;
-          padding: 2rem 2.5rem;
-          display: flex;
-          flex-direction: column;
-          gap: 2rem;
-        }
+      {/* Sync Response */}
+      {syncResponse && (
+        <AgentResponsePanel
+          title="Gmail Sync Status"
+          response={syncResponse}
+        />
+      )}
 
-        .col-right {
-          padding: 2rem 2.5rem;
-        }
-
-        @media (max-width: 900px) {
-          .finance-grid {
-            grid-template-columns: 1fr;
-          }
-          .col-left {
-            border-right: none;
-            border-bottom: 1px solid #1a1a1a;
-          }
-        }
-      `}</style>
-    </main>
-  );
+    </div>
+  )
 }

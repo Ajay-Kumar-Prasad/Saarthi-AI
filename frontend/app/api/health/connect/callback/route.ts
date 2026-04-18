@@ -5,12 +5,21 @@ import { NextRequest, NextResponse } from "next/server"
 // Called after the backend completes the Google OAuth flow.
 // Sets cookies to mark the user as connected, then redirects to the health dashboard.
 export async function GET(request: NextRequest) {
+  const appUrl = (
+    process.env.FRONTEND_URL ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.APP_URL ??
+    ""
+  ).replace(/\/$/, "")
   const { searchParams } = new URL(request.url)
   const userId = searchParams.get("user_id")
   const success = searchParams.get("success")
 
   if (!userId || success !== "true") {
-    return NextResponse.redirect(new URL("/health?error=oauth_failed", request.url))
+    const target = appUrl
+      ? `${appUrl}/health?error=oauth_failed`
+      : new URL("/health?error=oauth_failed", request.url)
+    return NextResponse.redirect(target)
   }
 
   const cookieStore = await cookies()
@@ -28,5 +37,6 @@ export async function GET(request: NextRequest) {
   })
 
   // Redirect to health page — the sync will happen automatically on first load
-  return NextResponse.redirect(new URL("/health", request.url))
+  const target = appUrl ? `${appUrl}/health` : new URL("/health", request.url)
+  return NextResponse.redirect(target)
 }

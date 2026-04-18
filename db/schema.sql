@@ -137,6 +137,46 @@ CREATE INDEX IF NOT EXISTS expenses_user_date_idx
     ON expenses(user_id, date DESC);
 
 -- =============================================================================
+-- HEALTH DOMAIN TABLES
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS health_daily_metrics (
+    user_id             UUID REFERENCES users(id) ON DELETE CASCADE,
+    date                DATE NOT NULL,
+    total_steps         INT,
+    total_calories      NUMERIC,
+    active_minutes      INT,
+    resting_heart_rate  NUMERIC,
+    synced_at           TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (user_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS health_sleep_logs (
+    user_id             UUID REFERENCES users(id) ON DELETE CASCADE,
+    date                DATE NOT NULL,
+    start_time          TIMESTAMPTZ NOT NULL,
+    end_time            TIMESTAMPTZ,
+    duration_minutes    INT,
+    sleep_stages        JSONB,
+    synced_at           TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (user_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS health_activity_logs (
+    user_id             UUID REFERENCES users(id) ON DELETE CASCADE,
+    date                DATE NOT NULL,
+    activity_type       TEXT NOT NULL,
+    start_time          TIMESTAMPTZ NOT NULL,
+    end_time            TIMESTAMPTZ,
+    duration_minutes    INT,
+    calories_burned     NUMERIC,
+    steps               INT,
+    distance_meters     NUMERIC,
+    avg_heart_rate      NUMERIC,
+    PRIMARY KEY (user_id, start_time)
+);
+
+-- =============================================================================
 -- DEMO SEED DATA — delete before production
 -- =============================================================================
 

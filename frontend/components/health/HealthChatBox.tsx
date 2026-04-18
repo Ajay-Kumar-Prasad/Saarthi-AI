@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
+import { postAgent } from "@/lib/api"
 
 interface Message {
   role: "user" | "agent"
@@ -18,36 +19,45 @@ export default function HealthChatBox() {
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
 
+  const bottomRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, loading])
+
   async function send(text: string) {
     if (!text.trim()) return
+
     const userMsg: Message = { role: "user", text: text.trim() }
     setMessages((prev) => [...prev, userMsg])
     setInput("")
     setLoading(true)
 
     try {
-      const API = process.env.API_URL || "http://localhost:8080"
-      const res = await fetch(`${API}/health/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text.trim(),
-          user_id: "chjoshna145@gmail.com",
-        }),
+      const response = await postAgent("/api/health/chat", {
+        message: text.trim(),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setMessages((prev) => [...prev, { role: "agent", text: data.summary ?? "No response from agent." }])
-    } catch {
-      setMessages((prev) => [...prev, { role: "agent", text: "Unable to fetch data. Please try again." }])
+
+      const reply =
+        typeof response.summary === "string" && response.summary.trim()
+          ? response.summary
+          : "No meaningful response from agent."
+
+      setMessages((prev) => [...prev, { role: "agent", text: reply }])
+    } catch (err) {
+      console.error("Health chat error:", err)
+      setMessages((prev) => [
+        ...prev,
+        { role: "agent", text: "Unable to fetch data. Please try again." },
+      ])
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex flex-col gap-3">
-      <p className="text-gray-400 text-xs uppercase tracking-wide">Ask Health Agent</p>
+    <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+      <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Ask Health Agent</p>
 
       {messages.length === 0 && (
         <div className="flex flex-wrap gap-2">
@@ -55,7 +65,7 @@ export default function HealthChatBox() {
             <button
               key={s}
               onClick={() => send(s)}
-              className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 rounded-full px-3 py-1 transition-colors"
+              className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700 transition-colors hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
             >
               {s}
             </button>
@@ -66,13 +76,13 @@ export default function HealthChatBox() {
       {messages.length > 0 && (
         <div className="space-y-3 max-h-56 overflow-y-auto pr-1">
           {messages.map((m, i) => (
-            <div key={i} className={`text-sm ${m.role === "user" ? "text-right" : ""}`}>
+            <div key={`${m.role}-${m.text}-${i}`} className={`text-sm ${m.role === "user" ? "text-right" : ""}`}>
               {m.role === "user" ? (
                 <span className="inline-block bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%] text-left">
                   {m.text}
                 </span>
               ) : (
-                <span className="inline-block bg-gray-800 text-gray-300 rounded-lg px-3 py-2 max-w-[90%] text-left">
+                <span className="inline-block max-w-[90%] rounded-lg bg-gray-100 px-3 py-2 text-left text-gray-700 dark:bg-gray-800 dark:text-gray-300">
                   {m.text}
                 </span>
               )}
@@ -80,9 +90,12 @@ export default function HealthChatBox() {
           ))}
           {loading && (
             <div className="text-sm">
-              <span className="inline-block bg-gray-800 text-gray-500 rounded-lg px-3 py-2">Thinking...</span>
+              <span className="inline-block rounded-lg bg-gray-100 px-3 py-2 text-gray-500 dark:bg-gray-800 dark:text-gray-500">
+                Thinking...
+              </span>
             </div>
           )}
+          <div ref={bottomRef} />
         </div>
       )}
 
@@ -97,7 +110,7 @@ export default function HealthChatBox() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about your health..."
-          className="flex-1 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors"
+          className="flex-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-indigo-500 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:placeholder-gray-600"
         />
         <button
           type="submit"

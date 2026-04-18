@@ -11,6 +11,8 @@ type ConflictCardProps = {
   conflictId: string
   explanation?: string
   timeline?: TimelineItem[]
+  onResolve?: (conflictId: string) => Promise<void> | void
+  onReschedule?: (conflictId: string) => Promise<void> | void
 }
 
 const DEFAULT_TIMELINE: TimelineItem[] = [
@@ -19,28 +21,16 @@ const DEFAULT_TIMELINE: TimelineItem[] = [
   { label: "+4h", intensity: 30 },
 ]
 
-async function postConflictAction(path: string, conflictId: string) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conflict_id: conflictId }),
-  })
-
-  if (!res.ok) {
-    throw new Error(`Request failed with status ${res.status}`)
-  }
-
-  return res.json().catch(() => ({}))
-}
-
 export default function ConflictCard({
   conflictId,
   explanation = "Your planned study session overlaps with a high-priority work deadline and low sleep recovery window.",
   timeline = DEFAULT_TIMELINE,
+  onResolve,
+  onReschedule,
 }: ConflictCardProps) {
   async function resolveConflict() {
     try {
-      await postConflictAction("/api/conflicts/resolve", conflictId)
+      if (onResolve) await onResolve(conflictId)
       toast.success("Conflict resolved successfully")
     } catch {
       toast.error("Could not resolve conflict")
@@ -49,7 +39,7 @@ export default function ConflictCard({
 
   async function rescheduleConflict() {
     try {
-      await postConflictAction("/api/conflicts/reschedule", conflictId)
+      if (onReschedule) await onReschedule(conflictId)
       toast.success("Conflict rescheduled successfully")
     } catch {
       toast.error("Could not reschedule conflict")

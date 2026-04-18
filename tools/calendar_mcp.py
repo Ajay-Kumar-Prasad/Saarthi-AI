@@ -13,13 +13,15 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "/home/ajayk10440/Saarthi-AI/token.json")
-CALENDAR_ID = os.getenv("SAARTHI_CALENDAR_ID", "ajayk10440@gmail.com")
+TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "").strip()
+CALENDAR_ID = os.getenv("SAARTHI_CALENDAR_ID", "").strip()
 TIMEZONE = "Asia/Kolkata"
 
 
 def _get_service():
     """Load credentials and return Calendar API service."""
+    if not TOKEN_PATH:
+        raise RuntimeError("GOOGLE_TOKEN_PATH is required for calendar integration.")
     with open(TOKEN_PATH) as f:
         data = json.load(f)
 
@@ -53,6 +55,8 @@ def _resolve_calendar_scope(user_id: str) -> tuple[str, bool]:
                     return cid.strip(), True
         except Exception as exc:
             logger.warning("Invalid SAARTHI_USER_CALENDAR_MAP; using fallback calendar: %s", exc)
+    if not CALENDAR_ID:
+        raise RuntimeError("SAARTHI_CALENDAR_ID is required when no per-user calendar mapping is set.")
     return CALENDAR_ID, False
 
 

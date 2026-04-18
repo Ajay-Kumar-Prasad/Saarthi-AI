@@ -2,7 +2,6 @@
 import { useState } from "react"
 import { api } from "@/lib/api"
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
 
 type Step = {
   id?: string
@@ -32,16 +31,7 @@ const STATUS_ICON: Record<string, string> = {
 }
 
 async function updateStep(pathId: string, stepId: string, status: string) {
-  const res = await fetch("/api/learning/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: USER_ID,
-      message: `Update learning path step: path_id=${pathId}, step_id=${stepId}, status=${status}`,
-    }),
-  })
-  if (!res.ok) throw new Error("Failed")
-  return res.json()
+  return api.learning.chat(`Update learning path step: path_id=${pathId}, step_id=${stepId}, status=${status}`)
 }
 
 export default function LearningPath() {
@@ -57,12 +47,14 @@ export default function LearningPath() {
     setLoading(true)
     try {
       const res = await api.learning.path(`I want to become a ${role}, create a roadmap for me`)
-      const raw = res?.data as Record<string, unknown>
-      const pathData = raw?.learning_path as Record<string, unknown>
-      const path = pathData?.path as Record<string, unknown>
-      setPathTitle(String(path?.title ?? `Road to ${role}`))
-      setPathId(String(path?.id ?? ""))
-      setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
+      if (res?.status === "ok") {
+        const data = res?.data?.data as Record<string, unknown>
+        const pathData = data?.learning_path as Record<string, unknown>
+        const path = pathData?.path as Record<string, unknown>
+        setPathTitle(String(path?.title ?? `Road to ${role}`))
+        setPathId(String(path?.id ?? ""))
+        setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
+      }
     } finally { setLoading(false) }
   }
 
@@ -70,19 +62,22 @@ export default function LearningPath() {
     setLoading(true)
     try {
       const res = await api.learning.path("Show my learning path")
-      const raw = res?.data as Record<string, unknown>
-      const paths = raw?.paths as Record<string, unknown>[]
+      if (res?.status !== "ok") return
+      const data = res?.data?.data as Record<string, unknown>
+      const paths = data?.paths as Record<string, unknown>[]
       if (!paths?.length) return
 
       const latest = paths[0]
       const pathIdVal = String(latest?.id ?? "")
       const res2 = await api.learning.path(`Show my learning path id=${pathIdVal}`)
-      const raw2 = res2?.data as Record<string, unknown>
-      const pathData = raw2?.path as Record<string, unknown> ?? {}
+      if (res2?.status === "ok") {
+        const data2 = res2?.data?.data as Record<string, unknown>
+        const pathData = data2?.path as Record<string, unknown> ?? {}
 
-      setPathTitle(String(pathData?.title ?? "My Learning Path"))
-      setPathId(String(pathData?.id ?? ""))
-      setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
+        setPathTitle(String(pathData?.title ?? "My Learning Path"))
+        setPathId(String(pathData?.id ?? ""))
+        setSteps(Array.isArray(pathData?.steps) ? pathData.steps as Step[] : [])
+      }
     } finally { setLoading(false) }
   }
 

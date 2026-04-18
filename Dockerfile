@@ -1,26 +1,20 @@
-# Saarthi AI — Learning Agent
-# Deploys as a serverless container to Google Cloud Run.
-# Cloud Run uses the IAM service account for AlloyDB and Vertex AI auth.
-# No credentials are baked into the image.
-
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies first (layer caching)
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY agents/   ./agents/
-COPY tools/    ./tools/
-COPY db/       ./db/
-COPY models/   ./models/
-COPY main.py   .
+# Copy project files
+COPY . .
 
-# Cloud Run listens on PORT (default 8080)
+# Set environment variables
 ENV PORT=8080
+ENV APP_ENV=production
 
+# Cloud Run binds to 8080 by default
 EXPOSE 8080
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# Use exec form for faster signals handling
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { BarChart, Card, Title, Text } from "@tremor/react"
 import { motion } from "framer-motion"
+import { getAgent } from "@/lib/api"
 
 type AgentName = "work" | "health" | "finance" | "learning" | "social"
 
@@ -90,16 +91,18 @@ export default function ContextPanel({ activeAgent }: ContextPanelProps) {
   const { data, isLoading } = useQuery({
     queryKey: ["context", activeAgent],
     queryFn: async () => {
-      const res = await fetch(`/api/context?agent=${activeAgent}`)
-      if (!res.ok) return null
-      return res.json() as Promise<{
-        agent: string
-        context: {
-          financeData?: Array<{ month: string; Spend: number }>
-          sleepData?: Array<{ day: string; SleepHours: number }>
-          tasks?: { total: number; dueToday: number; blocked: number; completed: number }
-        }
-      }>
+      const response = await getAgent(`/api/context?agent=${activeAgent}`)
+      const payload = response.data as
+        | {
+            agent?: string
+            context?: {
+              financeData?: Array<{ month: string; Spend: number }>
+              sleepData?: Array<{ day: string; SleepHours: number }>
+              tasks?: { total: number; dueToday: number; blocked: number; completed: number }
+            }
+          }
+        | null
+      return payload
     },
   })
 

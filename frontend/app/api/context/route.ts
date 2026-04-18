@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { AgentResponse } from "@/types/agent"
 
 type ContextAgent = "work" | "health" | "finance" | "learning" | "social"
 
@@ -37,8 +38,17 @@ export async function GET(req: NextRequest) {
     social: {},
   } as const
 
-  return NextResponse.json({
-    agent,
-    context: contextByAgent[agent] ?? contextByAgent.learning,
-  })
+  const response: AgentResponse<Record<string, unknown>> = {
+    agent: "context_agent",
+    status: "ok",
+    summary: "Context loaded successfully.",
+    conflicts: [],
+    actions_taken: [],
+    data: {
+      agent,
+      context: contextByAgent[agent] ?? contextByAgent.learning,
+    },
+  }
+
+  return NextResponse.json(response)
 }

@@ -5,27 +5,11 @@ import { api } from "@/lib/api"
 type Tab = "review" | "create"
 type Card = { question: string; answer: string; id?: string }
 
-const USER_ID = "00000000-0000-0000-0000-000000000001"
-function toUUID(id: string): string {
-  // If already UUID, return as is
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  if (uuidRegex.test(id)) return id
 
-  // Convert simple IDs like "5" → deterministic UUID
-  const padded = id.padStart(12, "0")
-  return `00000000-0000-0000-0000-${padded}`
-}
 async function createFlashcard(question: string, answer: string, resourceId: string) {
-  const res = await fetch("/api/learning/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: USER_ID,
-      message: `Create a flashcard: question="${question}", answer="${answer}", resource_id=${resourceId}`,
-    }),
-  })
-  if (!res.ok) throw new Error("Failed")
-  return res.json()
+  return api.learning.chat(
+    `Create a flashcard: question="${question}", answer="${answer}", resource_id=${resourceId}`,
+  )
 }
 
 // ── Review tab ────────────────────────────────────────────────────────────────
@@ -57,8 +41,8 @@ function ReviewTab({
     setLoading(true)
     try {
       const res = await api.learning.flashcards()
-      const raw = (res?.data as Record<string, unknown>)?.cards
-      const list = Array.isArray(raw) ? (raw as Card[]) : []
+      const cards = res?.data?.flashcards
+      const list = Array.isArray(cards) ? (cards as Card[]) : []
       setCards(list)
       setCurrent(0)
       setFlipped(false)
@@ -170,8 +154,12 @@ function CreateTab({ onCreated }: { onCreated: () => void }) {
     setSaving(true)
     setMsg(null)
     try {
-      const uuidResourceId = toUUID(resourceId.trim())
-      const res = await createFlashcard(question.trim(), answer.trim(), uuidResourceId)
+  
+      const res = await createFlashcard(
+        question.trim(),
+        answer.trim(),
+        resourceId.trim()
+      )
       setMsg({ text: res?.summary ?? "Card created!", ok: true })
       setQuestion("")
       setAnswer("")
@@ -193,7 +181,7 @@ function CreateTab({ onCreated }: { onCreated: () => void }) {
         <input
           value={resourceId}
           onChange={(e) => setResourceId(e.target.value)}
-          placeholder="e.g. 1"
+          placeholder="Enter resource ID (e.g. from a lesson)"
           className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500 transition-colors"
         />
       </div>

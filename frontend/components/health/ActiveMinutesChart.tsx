@@ -12,13 +12,16 @@ import {
 import type { DailyMetric } from "@/lib/health-api"
 import { format, parseISO } from "date-fns"
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+type TooltipPayloadItem = { value?: number }
+type TooltipProps = { active?: boolean; payload?: TooltipPayloadItem[]; label?: string }
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs">
-      <p className="text-gray-400 mb-1">{label}</p>
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-sm dark:border-gray-700 dark:bg-gray-900">
+      <p className="mb-1 text-gray-500 dark:text-gray-400">{label}</p>
       <p className="text-indigo-400">
-        Active: <span className="text-white font-medium">{payload[0]?.value} min</span>
+        Active: <span className="font-medium text-gray-900 dark:text-white">{payload[0]?.value} min</span>
       </p>
     </div>
   )
@@ -34,16 +37,16 @@ export default function ActiveMinutesChart({ metrics }: { metrics: DailyMetric[]
 
   if (!data.length) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <p className="text-gray-400 text-xs uppercase tracking-wide mb-4">Active Minutes</p>
-        <p className="text-gray-600 text-sm">No data available.</p>
+      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+        <p className="mb-4 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Active Minutes</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">No data available.</p>
       </div>
     )
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <p className="text-gray-400 text-xs uppercase tracking-wide mb-4">Active Minutes — Daily</p>
+    <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+      <p className="mb-4 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Active Minutes — Daily</p>
       <ResponsiveContainer width="100%" height={180}>
         <AreaChart data={data}>
           <defs>

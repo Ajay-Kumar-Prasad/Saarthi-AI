@@ -42,7 +42,6 @@ class SleepSession(BaseModel):
     duration_minutes: int
     sleep_stages: dict[str, int] | None = None  # light/deep/rem/awake in minutes
 
-
 class ActivitySession(BaseModel):
     date: date
     activity_type: str
@@ -54,7 +53,6 @@ class ActivitySession(BaseModel):
     distance_meters: float | None = None
     avg_heart_rate: float | None = None
 
-
 class DailyMetrics(BaseModel):
     date: str
     total_steps: int | None = None
@@ -62,14 +60,10 @@ class DailyMetrics(BaseModel):
     active_minutes: int | None = None
     resting_heart_rate: float | None = None
 
-
 class HealthSummary(BaseModel):
     user_id: str
-    period_days: int
-    sleep_sessions: list[SleepSession] = Field(default_factory=list)
-    activity_sessions: list[ActivitySession] = Field(default_factory=list)
-    daily_metrics: list[DailyMetrics] = Field(default_factory=list)
-    avg_sleep_minutes: float | None = None
-    avg_steps: float | None = None
-    avg_resting_heart_rate: float | None = None
-    total_active_minutes: int | None = None
+    date: date
+    total_steps: int | None = None
+    total_calories: float | None = None
+    active_minutes: int | None = None
+    sleep_duration_min: int | None = None

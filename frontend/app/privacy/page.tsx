@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { deleteAgent } from "@/lib/api"
 
 export default function PrivacyPage() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
@@ -12,9 +13,11 @@ export default function PrivacyPage() {
     setStatusMessage(null)
 
     try {
-      const res = await fetch("/api/user/delete", { method: "DELETE" })
-      if (!res.ok) throw new Error("Delete failed")
-      setStatusMessage("All your data has been deleted.")
+      const response = await deleteAgent("/api/user/delete")
+      if (response.status === "error") {
+        throw new Error("Delete failed")
+      }
+      setStatusMessage(response.summary || "All your data has been deleted.")
     } catch {
       setStatusMessage("Could not delete your data. Please try again.")
     } finally {
