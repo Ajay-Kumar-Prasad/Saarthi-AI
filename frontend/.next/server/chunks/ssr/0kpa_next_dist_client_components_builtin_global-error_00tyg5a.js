@@ -1,0 +1,3 @@
+module.exports=[89412,(a,b,c)=>{let{createClientModuleProxy:d}=a.r(47315);a.n(d("[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/node_modules/next/dist/client/components/builtin/global-error.js <module evaluation>"))},97252,(a,b,c)=>{let{createClientModuleProxy:d}=a.r(47315);a.n(d("[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/node_modules/next/dist/client/components/builtin/global-error.js"))},10820,a=>{"use strict";a.i(89412);var b=a.i(97252);a.n(b)},90907,a=>{a.n(a.i(10820))}];
+
+//# sourceMappingURL=0kpa_next_dist_client_components_builtin_global-error_00tyg5a.js.map

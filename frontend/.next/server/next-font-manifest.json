@@ -1,0 +1,31 @@
+{
+  "app": {
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/_not-found/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/finance/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/health/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/learning/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/privacy/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/social/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ],
+    "[project]/Desktop/GenAI Academy APAC/Saarthi-AI/frontend/app/work/page": [
+      "static/media/83afe278b6a6bb3c-s.p.0q-301v4kxxnr.woff2"
+    ]
+  },
+  "appUsingSizeAdjust": true,
+  "pages": {},
+  "pagesUsingSizeAdjust": false
+}

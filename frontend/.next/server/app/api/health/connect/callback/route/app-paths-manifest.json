@@ -1,0 +1,3 @@
+{
+  "/api/health/connect/callback/route": "app/api/health/connect/callback/route.js"
+}

@@ -4,7 +4,7 @@ import json
 import re
 
 # INIT CLIENT
-client = genai.Client(api_key="AIzaSyBtTD6eAilNXiLz3_7dtSJdsdWmGO5spws")
+client = genai.Client(api_key="YOUR_API_KEY")
 
 
 def call_tool(tool, args):
